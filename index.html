@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0d1017" />
+  <title>Сфера — личный планировщик</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand"><div class="brand-mark">✦</div><div><strong>сфера</strong><span>личный ритм</span></div></div>
+      <div class="sidebar-label">Рабочее пространство</div>
+      <nav class="main-nav">
+        <button class="nav-item active" data-view="overview"><span class="nav-icon">⌂</span>Обзор</button>
+        <button class="nav-item" data-view="tasks"><span class="nav-icon">✓</span>Мои задачи <b class="nav-count">8</b></button>
+        <button class="nav-item" data-view="calendar"><span class="nav-icon">▦</span>Календарь</button>
+        <button class="nav-item" data-view="music"><span class="nav-icon">◖</span>Музыка</button>
+        <button class="nav-item" data-view="news"><span class="nav-icon">▤</span>Новостник <i class="unread-dot"></i></button>
+      </nav>
+      <div class="sidebar-label second">Личное</div>
+      <nav class="main-nav">
+        <button class="nav-item" data-view="goals"><span class="nav-icon">◎</span>Мои цели</button>
+        <button class="nav-item" data-view="profile"><span class="nav-icon">◉</span>Личный кабинет</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="focus-mini"><div class="mini-orbit">◌</div><div><span>Фокус дня</span><strong>74% энергии</strong></div></div>
+        <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span>Настройки</button>
+        <div class="user-mini"><div class="avatar">АИ</div><div><strong>Алексей Иванов</strong><span>Мой аккаунт</span></div><span class="more">···</span></div>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <button class="mobile-menu" id="menuBtn">☰</button>
+        <div class="breadcrumb"><span id="currentDate">Сегодня</span></div>
+        <div class="top-actions">
+          <button class="icon-btn" id="themeBtn" title="Переключить тему">☼</button>
+          <button class="icon-btn" id="notificationsBtn" title="Уведомления" aria-label="Уведомления">🔔<i class="notification-dot"></i></button>
+          <button class="quick-add" id="openTask"><span>＋</span> Новая задача</button>
+        </div>
+      </header>
+
+      <div class="view-wrap">
+        <section class="view active" id="view-overview">
+          <div class="welcome-row"><div><p class="eyebrow">ТВОЙ ДЕНЬ В ФОКУСЕ</p><h1 id="greetingTitle">Добрый день, Алексей <span>✦</span></h1><p class="subheading" id="motivationalText">Сегодня хороший день, чтобы сделать важное.</p></div><div class="date-badge"><strong id="dateBadgeDay">27</strong><span id="dateBadgeMonth">ОКТ<br />2026</span></div></div>
+          <div class="hero-grid">
+            <article class="focus-card card"><div class="card-top"><div><p class="eyebrow warm">ГЛАВНЫЙ ФОКУС</p><h2>Создать что-то<br /><em>значимое</em></h2></div><div class="focus-ring"><span id="focusProgress">0%</span></div></div><div class="focus-bottom"><span>Продолжай в том же духе</span><button class="text-btn" data-view-target="tasks">Все задачи →</button></div></article>
+            <article class="quote-card card"><div class="quote-mark">“</div><p>«Мы — это то,<br />что делаем каждый<br />день.»</p><span>— Аристотель</span><button class="refresh-quote" id="quoteBtn">↻</button></article>
+          </div>
+          <div class="section-heading"><div><p class="eyebrow">СЕГОДНЯ · <span id="todayPlanDate">27 ОКТЯБРЯ</span></p><h2>Твой план</h2></div><button class="filter-pill" data-view-target="tasks">Все задачи <span id="taskCountOverview">0</span>⌄</button></div>
+          <div class="dashboard-grid">
+            <article class="card tasks-card"><div class="task-list-head"><span class="muted" id="completionSummary">0 из 0 выполнено</span><span class="progress-text">0%</span></div><div class="progress-bar"><i style="width:0%"></i></div><div id="todayTasks" class="task-list"></div><button class="add-inline" id="addInline">＋ Добавить задачу</button></article>
+            <div class="right-stack"><article class="card energy-card"><div class="card-heading"><div><p class="eyebrow">РЕСУРС</p><h3>Энергия сегодня</h3></div><span class="status-chip" id="energyStatus">Начинаем</span></div><div class="energy-visual"><div class="energy-number" id="completionPercent">0<span>%</span></div><div class="energy-bars" id="energyBars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div><div class="energy-footer"><span id="energySummary">Выполнено задач: 0 из 0</span></div></article><article class="card habit-card"><div class="card-heading"><div><p class="eyebrow">СЕРИЯ</p><h3>Мои привычки</h3></div><button class="more-btn" id="habitMore">···</button></div><div class="habit-row"><span class="habit-icon blue">◒</span><div><strong>Утренняя зарядка</strong><span>Отмечай каждый день</span></div><button class="habit-check" data-habit="0">○</button></div><div class="habit-row"><span class="habit-icon yellow">◒</span><div><strong>Читать 20 минут</strong><span>Маленький шаг каждый день</span></div><button class="habit-check" data-habit="1">○</button></div></article></div>
+          </div>
+          <div class="section-heading lower"><div><p class="eyebrow">БЫСТРЫЕ ДЕЙСТВИЯ</p><h2>Инструменты для тебя</h2></div></div>
+          <div class="tools-grid"><button class="tool-card pomodoro" id="pomodoroBtn"><span class="tool-symbol">◷</span><strong>Фокус-таймер</strong><small>25 минут глубокого фокуса</small><b>Запустить →</b></button><button class="tool-card notes" id="noteBtn"><span class="tool-symbol">✎</span><strong>Быстрая заметка</strong><small>Идеи, мысли, инсайты</small><b>Открыть →</b></button><button class="tool-card breathing" id="breathBtn"><span class="tool-symbol">◌</span><strong>Перезагрузка</strong><small>2 минуты на себя</small><b>Начать →</b></button></div>
+        </section>
+
+        <section class="view" id="view-tasks"><div class="page-header"><div><p class="eyebrow">РАБОЧЕЕ ПРОСТРАНСТВО</p><h1>Мои задачи</h1><p class="subheading">Собери день вокруг того, что действительно важно.</p></div><button class="primary-btn" id="openTask2">＋ Новая задача</button></div><div class="task-toolbar"><div class="tabs"><button class="tab active" data-filter="all">Все <span id="allTaskCount">0</span></button><button class="tab" data-filter="today">Сегодня <span id="todayTaskCount">0</span></button><button class="tab" data-filter="important">Важные <span id="importantTaskCount">0</span></button></div><button class="sort-btn" id="sortTasks">По времени ↑</button></div><div class="card all-tasks-card" id="allTasks"></div></section>
+
+        <section class="view" id="view-calendar"><div class="page-header"><div><p class="eyebrow">ПЛАН НА БУДУЩЕЕ</p><h1>Календарь</h1><p class="subheading">Нажми на дату, чтобы увидеть её задачи.</p></div><button class="primary-btn" id="openEvent">＋ Добавить задачу</button></div><div class="calendar-layout"><article class="card calendar-card"><div class="calendar-head"><button id="prevMonth" aria-label="Предыдущий месяц">‹</button><h2 id="monthName">Месяц</h2><button id="nextMonth" aria-label="Следующий месяц">›</button><button class="today-btn" id="todayCalendar">Сегодня</button></div><div class="weekdays"><span>ПН</span><span>ВТ</span><span>СР</span><span>ЧТ</span><span>ПТ</span><span>СБ</span><span>ВС</span></div><div id="calendarGrid" class="calendar-grid"></div></article><aside class="card agenda-card"><div class="card-heading"><div><p class="eyebrow" id="agendaDate">СЕГОДНЯ</p><h3 id="agendaTitle">Задачи выбранной даты</h3></div><span class="agenda-count" id="agendaCount">0</span></div><div id="agendaList"></div></aside></div></section>
+
+        <section class="view" id="view-music"><div class="page-header"><div><p class="eyebrow">ЗВУК ДЛЯ ФОКУСА</p><h1>Музыка</h1><p class="subheading">Добавляй плейлисты и собирай свой саундтрек.</p></div><div class="music-actions"><button class="secondary-btn" id="importVk">Импорт из VK</button><button class="primary-btn" id="createPlaylist">＋ Новый плейлист</button></div></div><div class="music-hero card"><div class="album-art"><span>◒</span><i></i></div><div class="now-playing"><p class="eyebrow">СЕЙЧАС ИГРАЕТ</p><h2 id="nowPlayingTitle">Выбери трек</h2><p id="nowPlayingArtist">Твои добавленные композиции появятся здесь</p><div class="music-progress"><i id="musicProgress"></i></div><div class="music-times"><span id="musicCurrent">0:00</span><span id="musicDuration">0:00</span></div><div class="player-controls"><button id="prevTrack">↶</button><button class="play-btn" id="playBtn">▶</button><button id="nextTrack">↷</button></div></div><div class="waveform">▁▂▃▅▇▆▅▃▂▃▅▆▇▅▃▂▁▃▅▇▆▅▃</div></div><div class="section-heading"><div><p class="eyebrow">ТВОИ ПЛЕЙЛИСТЫ</p><h2>Добавленные плейлисты</h2></div><button class="filter-pill" id="musicSort">Сначала новые ⌄</button></div><div class="playlist-grid" id="playlistGrid"></div><div class="card track-library"><div class="card-heading"><div><p class="eyebrow">ФОНОТЕКА</p><h3>Треки и рейтинг популярности</h3></div><span class="status-chip" id="trackCount">0 треков</span></div><div id="trackList"></div></div></section>
+
+        <section class="view" id="view-news"><div class="page-header"><div><p class="eyebrow">ДЛЯ РАЗВИТИЯ</p><h1>Новостник</h1><p class="subheading">Идеи и знания, которые двигают тебя вперёд.</p></div><button class="filter-pill">Моя лента ⌄</button></div><div class="news-layout"><div class="news-list"><article class="news-card card featured-news"><div class="news-cover cover-purple"><span>THE<br />CREATIVE<br />MIND</span></div><div class="news-content"><div class="news-meta"><span>ПСИХОЛОГИЯ</span><small>8 минут чтения</small></div><h2>Как создавать пространство для больших идей</h2><p>О внимании, паузах и маленьких ритуалах, которые помогают думать глубже и действовать смелее.</p><a href="#">Читать статью →</a></div></article><article class="news-card card"><div class="article-icon blue">⌁</div><div class="news-content"><div class="news-meta"><span>ПРОДУКТИВНОСТЬ</span><small>5 минут чтения</small></div><h2>Метод двух минут: начни с малого</h2><p>Почему самое сложное — просто начать.</p><a href="#">Читать →</a></div></article><article class="news-card card"><div class="article-icon orange">✦</div><div class="news-content"><div class="news-meta"><span>КРЕАТИВНОСТЬ</span><small>6 минут чтения</small></div><h2>Твои лучшие идеи любят прогулки</h2><p>Немного науки о движении и мышлении.</p><a href="#">Читать →</a></div></article></div><aside class="card saved-card"><p class="eyebrow">СОХРАНЁННОЕ</p><h3>На потом</h3><div class="saved-item"><span>◈</span><div><strong>Искусство говорить «нет»</strong><small>4 минуты</small></div></div><div class="saved-item"><span>◈</span><div><strong>Новая система обучения</strong><small>9 минут</small></div></div><button class="text-btn">Все сохранённые →</button></aside></div></section>
+
+        <section class="view" id="view-goals"><div class="page-header"><div><p class="eyebrow">НАПРАВЛЕНИЕ</p><h1>Мои цели</h1><p class="subheading">Большие результаты складываются из маленьких шагов.</p></div><button class="primary-btn" id="addGoal">＋ Новая цель</button></div><div class="goals-grid"><article class="card goal-card goal-main"><div class="goal-top"><span class="goal-icon purple">⌁</span><span class="goal-period">До 31 декабря 2024</span></div><h2>Запустить свой проект</h2><p>Создать и выпустить продукт, которым буду гордиться.</p><div class="goal-progress"><div><span>Прогресс</span><b>68%</b></div><div class="progress-bar"><i style="width:68%"></i></div></div><div class="goal-footer"><span>8 из 12 шагов</span><button class="text-btn">Открыть цель →</button></div></article><article class="card goal-card"><div class="goal-top"><span class="goal-icon blue">⌁</span><span class="goal-period">До 1 ноября</span></div><h2>Пробежать 100 км</h2><p>Здоровье и энергия — моя главная инвестиция.</p><div class="goal-progress"><div><span>Прогресс</span><b>42%</b></div><div class="progress-bar blue-bar"><i style="width:42%"></i></div></div><div class="goal-footer"><span>42 из 100 км</span><button class="text-btn">Открыть →</button></div></article><article class="card goal-card"><div class="goal-top"><span class="goal-icon orange">✦</span><span class="goal-period">На этот месяц</span></div><h2>Прочитать 3 книги</h2><p>Расширять кругозор и находить новые смыслы.</p><div class="goal-progress"><div><span>Прогресс</span><b>33%</b></div><div class="progress-bar orange-bar"><i style="width:33%"></i></div></div><div class="goal-footer"><span>1 из 3 книг</span><button class="text-btn">Открыть →</button></div></article></div></section>
+
+        <section class="view" id="view-profile"><div class="page-header"><div><p class="eyebrow">ТВОЁ ПРОСТРАНСТВО</p><h1>Личный кабинет</h1><p class="subheading">Настрой сферу под свой ритм.</p></div><button class="primary-btn">Сохранить изменения</button></div><div class="profile-layout"><article class="card profile-card"><div class="profile-cover" id="profileCover"></div><div class="profile-body"><div class="profile-avatar">АИ</div><h2>Алексей Иванов</h2><p>@alexey.ivanov · Москва</p><div class="profile-stats"><div><b>24</b><span>дня серии</span></div><div><b>86</b><span>задач закрыто</span></div><div><b>12</b><span>целей в году</span></div></div><button class="secondary-btn">Изменить профиль</button></div></article><article class="card settings-card"><div class="card-heading"><div><p class="eyebrow">ТВОЯ СТАТИСТИКА</p><h3>Ритм недели</h3></div><span class="status-chip">Эта неделя</span></div><div class="chart"><div class="chart-bars"><i style="height:42%"></i><i style="height:67%"></i><i style="height:52%"></i><i style="height:88%"></i><i style="height:71%"></i><i style="height:94%"></i><i style="height:58%"></i></div><div class="chart-labels"><span>ПН</span><span>ВТ</span><span>СР</span><span>ЧТ</span><span>ПТ</span><span>СБ</span><span>ВС</span></div></div><div class="stat-callout"><span>✦</span><div><strong>Отличная динамика!</strong><small>Ты продуктивнее на 18%, чем на прошлой неделе.</small></div></div></article></div></section>
+
+        <section class="view" id="view-settings"><div class="page-header"><div><p class="eyebrow">ПОД ТЕБЯ</p><h1>Настройки</h1><p class="subheading">Управляй своим цифровым пространством.</p></div></div><div class="card preferences"><div class="preference-row"><div><strong>Утреннее напоминание</strong><span>Получать план дня в 08:00</span></div><button class="toggle on"><i></i></button></div><div class="preference-row"><div><strong>Звуки интерфейса</strong><span>Мягкие сигналы при выполнении задач</span></div><button class="toggle on"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать отвлекающие уведомления</span></div><button class="toggle"><i></i></button></div><div class="preference-row"><div><strong>Синхронизация</strong><span>Автоматически сохранять изменения</span></div><button class="toggle on"><i></i></button></div></div></section>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="modal"><div class="modal card"><button class="modal-close" id="closeModal">×</button><p class="eyebrow">НОВЫЙ ШАГ</p><h2>Добавить задачу</h2><p class="modal-sub">Что поможет твоему дню стать лучше?</p><label>Название задачи<input id="taskInput" type="text" placeholder="Например, закончить презентацию" /></label><div class="form-row"><label>Время<input id="timeInput" type="time" value="10:00" /></label><label>Приоритет<select id="priorityInput"><option value="blue">Обычный</option><option value="orange">Важный</option><option value="purple">Высокий</option></select></label></div><div class="modal-actions"><button class="secondary-btn" id="cancelModal">Отмена</button><button class="primary-btn" id="saveTask">Добавить задачу</button></div></div></div>
+  <div class="toast" id="toast"><span>✓</span><div><strong>Готово</strong><small>Изменения сохранены</small></div></div>
+  <div class="focus-modal" id="focusModal"><div class="focus-modal-inner card"><button class="modal-close" id="closeFocus">×</button><p class="eyebrow">РЕЖИМ ФОКУСА</p><div class="timer" id="timer">25:00</div><p class="subheading">Один шаг за раз. Ты справишься.</p><button class="primary-btn" id="timerStart">Запустить таймер</button></div></div>
+  <script src="app.js"></script>
+</body>
+</html>
