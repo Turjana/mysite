@@ -3,21 +3,27 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-const dateKey = (date = new Date(), timeZone = state?.weather?.timezone) => {
-  const parts = new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date).reduce((out,item)=>(out[item.type]=item.value,out),{});
-  return `${parts.year}-${parts.month}-${parts.day}`;
+const dateKey = (date = new Date()) => {
+  const value = date instanceof Date ? date : new Date(date);
+  return `${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,'0')}-${String(value.getDate()).padStart(2,'0')}`;
 };
 const today = () => dateKey(new Date());
 const fromDate = value => new Date(`${value}T12:00:00`);
 const formatDate = value => fromDate(value).toLocaleDateString('ru-RU', {day:'numeric',month:'long',year:'numeric'});
+const OWNER_EMAIL = '369turush@gmail.com';
+const isOwner = account => normalizeEmail(account?.email) === OWNER_EMAIL;
 const LEGACY_STORAGE = 'sphere-v2';
 const ACCOUNTS_KEY = 'sphere-accounts';
 const SESSION_KEY = 'sphere-session';
 const ACCOUNT_PREFIX = 'sphere-state:';
+// Общая облачная база. anon key — публичный ключ клиента, доступ к таблицам закрыт RLS.
+const SUPABASE_URL = 'https://kfowalcxzrtzpucxeqon.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtmb3dhbGN4enJ0enB1Y3hlcW9uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMyOTg2NzksImV4cCI6MjEwODg3NDY3OX0.rl8DxiWv4e6vlpOIOQknqj9yKTVniWXp8pZ1WFwfOlU';
+const CLOUD_ENABLED = /^https:\/\/.+\.supabase\.co$/i.test(SUPABASE_URL) && SUPABASE_ANON_KEY.length > 40;
 const priorityLabels = {urgent:'Срочный',medium:'Средний',low:'Не срочный'};
 const priorityRank = {urgent:0,medium:1,low:2};
 const normalizePriority = value => ({blue:'low',orange:'medium',purple:'urgent'}[value] || (priorityLabels[value] ? value : 'medium'));
-const emptyState = () => ({version:3,tasks:[],goals:[],playlists:[],tracks:[],profile:{name:'',alias:'',photo:'',photoX:50,photoY:50,photoScale:1,layout:'card',video:'',videoDuration:0,ownerPrefix:'Владелец',status:'✦ В своём ритме'},habits:[{id:uid(),name:'Утренняя зарядка',days:[]},{id:uid(),name:'Читать 20 минут',days:[]}],note:'',theme:'dark',settings:{sound:false,focus:false,morning:false},weather:{city:'Москва',lat:55.7558,lon:37.6173,timezone:'Europe/Moscow',temp:null,code:null,desc:'',updated:0},newsSources:[],sessions:0});
+const emptyState = () => ({version:3,tasks:[],goals:[],playlists:[],tracks:[],profile:{name:'',alias:'',photo:'',photoX:50,photoY:50,photoScale:1,layout:'card',video:'',videoDuration:0,ownerPrefix:'Владелец',status:'✦ В своём ритме'},habits:[{id:uid(),name:'Утренняя зарядка',days:[]},{id:uid(),name:'Читать 20 минут',days:[]}],note:'',theme:'dark',settings:{sound:false,focus:false,morning:false},weather:{city:'Москва',lat:55.7558,lon:37.6173,timezone:'Europe/Moscow',temp:null,code:null,desc:'',updated:0},newsSources:[],newsFeed:[],newsCustom:[],sessions:0});
 const readStore = (key, fallback = null) => { try { const value = JSON.parse(localStorage.getItem(key)); return value ?? fallback; } catch { return fallback; } };
 function normalizeState(raw) {
   const base = emptyState(), source = raw && typeof raw === 'object' ? raw : {};
@@ -34,6 +40,8 @@ function normalizeState(raw) {
   next.weather = {...base.weather, ...(source.weather || {})};
   next.settings = {...base.settings, ...(source.settings || {})};
   next.newsSources = Array.isArray(source.newsSources) ? source.newsSources : [];
+  next.newsFeed = Array.isArray(source.newsFeed) ? source.newsFeed : [];
+  next.newsCustom = Array.isArray(source.newsCustom) ? source.newsCustom : [];
   next.goals = Array.isArray(source.goals) ? source.goals : [];
   next.tasks = (Array.isArray(source.tasks) ? source.tasks : []).map(task => ({...task, priority:normalizePriority(task?.priority)}));
   next.tracks = Array.isArray(source.tracks) ? source.tracks : [];
@@ -49,11 +57,207 @@ let currentAccount = accounts.find(account => account?.id === sessionId) || null
 let STORAGE = currentAccount ? ACCOUNT_PREFIX + currentAccount.id : LEGACY_STORAGE;
 let state = normalizeState(readStore(STORAGE, null) || emptyState());
 const firstAccountSeed = !currentAccount && accounts.length === 0 ? JSON.parse(JSON.stringify(state)) : null;
+
+// Локальная админ-база: карточки пользователей, предупреждения и журнал действий.
+const ADMIN_DB_KEY = 'sphere-admin-db';
+const ADMIN_LOG_LIMIT = 600;
+const emptyAdminDb = () => ({version:1, users:{}, events:[]});
+function readAdminDb() {
+  const raw = readStore(ADMIN_DB_KEY, null);
+  if (!raw || typeof raw !== 'object') return emptyAdminDb();
+  const db = emptyAdminDb();
+  db.users = raw.users && typeof raw.users === 'object' ? raw.users : {};
+  db.events = Array.isArray(raw.events) ? raw.events : [];
+  for (const [id, record] of Object.entries(db.users)) {
+    if (!record || typeof record !== 'object') { db.users[id] = {warnings:[],lastSeen:0}; continue; }
+    record.warnings = Array.isArray(record.warnings) ? record.warnings : [];
+    record.lastSeen = +record.lastSeen || 0;
+  }
+  return db;
+}
+let adminDb = readAdminDb();
+function saveAdminDb() {
+  try { localStorage.setItem(ADMIN_DB_KEY, JSON.stringify(adminDb)); } catch {}
+}
+function adminUserRecord(id) {
+  if (!adminDb.users[id] || typeof adminDb.users[id] !== 'object') adminDb.users[id] = {warnings:[],lastSeen:0};
+  if (!Array.isArray(adminDb.users[id].warnings)) adminDb.users[id].warnings = [];
+  return adminDb.users[id];
+}
+function syncAdminDb() {
+  let changed = false;
+  for (const account of accounts) {
+    if (!account?.id) continue;
+    const record = adminUserRecord(account.id);
+    if (!record.createdAt && account.created) { record.createdAt = account.created; changed = true; }
+  }
+  for (const id of Object.keys(adminDb.users)) {
+    if (!accounts.some(account => account?.id === id)) { delete adminDb.users[id]; changed = true; }
+  }
+  if (changed) saveAdminDb();
+}
+function logAction(action, details = '', targetId = '') {
+  try {
+    const actor = currentAccount ? {
+      id: currentAccount.id,
+      name: currentAccount.name || currentAccount.alias || currentAccount.email,
+      alias: currentAccount.alias || '',
+      email: currentAccount.email || ''
+    } : {id:'',name:'Гость',alias:'',email:''};
+    adminDb.events.unshift({id:uid(), at:Date.now(), action, details, targetId, actor});
+    if (adminDb.events.length > ADMIN_LOG_LIMIT) adminDb.events.length = ADMIN_LOG_LIMIT;
+    saveAdminDb();
+    if (cloudSessionActive()) {
+      const eventAccount = currentAccount;
+      cloudRpc('sphere_event_add', {
+        p_id: eventAccount.id,
+        p_token: eventAccount.token,
+        p_action: action,
+        p_details: details,
+        p_target: targetId ? String(targetId) : ''
+      }).then(() => {
+        if (activeView === 'admin' && isOwner(currentAccount)) refreshAdminData();
+      }).catch(() => {});
+    }
+    if (activeView === 'admin' && isOwner(currentAccount)) renderAdmin();
+  } catch {}
+}
+function unreadWarnings(accountId) {
+  return adminUserRecord(accountId).warnings.filter(warning => !warning.read);
+}
+
+// --- Облако Supabase -------------------------------------------------------
+const cloudErrorMessages = {
+  invalid_credentials: 'Неверный пароль.',
+  account_not_found: 'Аккаунт с таким email не найден.',
+  invalid_recovery: 'Неверный код восстановления.',
+  email_taken: 'Аккаунт с таким email уже существует.',
+  alias_taken: 'Такой псевдоним уже занят.',
+  alias_invalid: 'Псевдоним должен быть от 3 до 32 символов без пробелов.',
+  email_invalid: 'Введите корректный email.',
+  invalid_session: 'Сессия устарела. Войдите заново.',
+  forbidden: 'Недостаточно прав.',
+  target_not_found: 'Профиль не найден.',
+  owner_protected: 'Аккаунт владельца удалить нельзя.',
+  warning_empty: 'Введите текст предупреждения.'
+};
+function cloudErrorText(raw) {
+  const key = String(raw || '').trim().toLowerCase();
+  return cloudErrorMessages[key] || (key.includes('failed to fetch') ? 'Нет связи с облаком. Проверьте интернет.' : String(raw || 'Ошибка облака.'));
+}
+async function cloudRpc(name, payload = {}) {
+  if (!CLOUD_ENABLED) throw new Error('Облако не настроено.');
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15000);
+  let response;
+  try {
+    response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${name}`, {
+      method: 'POST', signal: controller.signal,
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+  } catch {
+    const error = new Error('Нет связи с облаком. Проверьте интернет.');
+    error.cloudUnavailable = true;
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+  const text = await response.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!response.ok) {
+    const raw = data && typeof data === 'object' ? (data.message || data.error_description || data.msg) : text;
+    const error = new Error(cloudErrorText(raw || `HTTP ${response.status}`));
+    error.code = String(raw || '');
+    error.cloudUnavailable = response.status >= 500;
+    throw error;
+  }
+  return data;
+}
+function cloudSessionActive() {
+  return CLOUD_ENABLED && !!currentAccount && !!currentAccount.token;
+}
+function cacheCloudAccount(account) {
+  if (!account?.id) return;
+  const index = accounts.findIndex(item => item?.id === account.id);
+  if (index >= 0) accounts[index] = {...accounts[index], ...account};
+  else accounts.push(account);
+  try { localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts)); } catch {}
+}
+function findLocalAccount(identifier) {
+  return accounts.find(item => normalizeEmail(item.email) === normalizeEmail(identifier) || normalizeAlias(item.alias) === normalizeAlias(identifier));
+}
+let cloudSaveTimer = 0, cloudSaving = false, cloudSaveQueued = false, cloudWarnedAt = 0, cloudOfflineNotified = false;
+function scheduleCloudSave(delay = 500) {
+  if (!cloudSessionActive()) return;
+  clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = setTimeout(saveCloudNow, delay);
+}
+async function saveCloudNow() {
+  if (!cloudSessionActive()) return;
+  if (cloudSaving) { cloudSaveQueued = true; return; }
+  clearTimeout(cloudSaveTimer); cloudSaveTimer = 0;
+  cloudSaving = true;
+  try {
+    await cloudRpc('sphere_state_save', {
+      p_id: currentAccount.id,
+      p_token: currentAccount.token,
+      p_data: JSON.parse(JSON.stringify(state))
+    });
+  } catch (error) {
+    if (String(error.code || '').toLowerCase() === 'invalid_session') {
+      currentAccount = null;
+      localStorage.removeItem(SESSION_KEY);
+      showAuth('login');
+      toast('Сессия больше не действует. Войдите заново.', true);
+      return;
+    }
+    if (Date.now() - cloudWarnedAt > 15000) {
+      cloudWarnedAt = Date.now();
+      toast('Облако недоступно. Изменения сохранены локально и отправятся позже.', true);
+    }
+  } finally {
+    cloudSaving = false;
+    if (cloudSaveQueued) { cloudSaveQueued = false; scheduleCloudSave(80); }
+  }
+}
+async function migrateLocalAccount(account) {
+  const localState = normalizeState(readStore(accountKey(account), null) || emptyState());
+  const token = randomHex(32);
+  const result = await cloudRpc('sphere_register', {
+    p_id: account.id,
+    p_name: account.name || account.alias || account.email,
+    p_alias: account.alias,
+    p_email: account.email,
+    p_salt: account.salt,
+    p_hash: account.passHash,
+    p_recovery_hash: account.recoveryHash || null,
+    p_token: token,
+    p_state: localState
+  });
+  const migrated = {...account, id:result.id, name:result.name, alias:result.alias, email:result.email,
+    created:+result.created || account.created, token:result.token || token};
+  cacheCloudAccount(migrated);
+  return migrated;
+}
+function applyCloudState(raw) {
+  const source = raw && typeof raw === 'object' && Object.keys(raw).length ? raw : null;
+  return source ? normalizeState(source) : null;
+}
+
 // Each account gets its own state key. Legacy data is adopted by the first registered account.
 function persist() {
   if (!currentAccount) return false;
-  try { localStorage.setItem(STORAGE, JSON.stringify(state)); return true; }
-  catch { toast('Не удалось сохранить: хранилище браузера заполнено.', true); return false; }
+  let localSaved = true;
+  try { localStorage.setItem(STORAGE, JSON.stringify(state)); }
+  catch { localSaved = false; toast('Не удалось сохранить локально: хранилище браузера заполнено.', true); }
+  scheduleCloudSave();
+  return localSaved;
 }
 function toast(text, error = false) {
   const el = $('#toast'); $('strong', el).textContent = error ? 'Внимание' : 'Сфера';
@@ -64,7 +268,7 @@ let selectedDate = today(), calendarMonth = new Date().getMonth(), calendarYear 
 let taskFilter = 'all', taskSort = 'manual', musicSort = 'new', selectedPlaylist = '', currentTrack = '';
 let draggedTaskId = '';
 let activeView = 'overview', clockDate = today();
-let newsFilter = 'Все';
+let newsFilter = 'Все', newsSource = 'Все';
 const statuses = {0:'Не начато',50:'Наполовину',100:'Выполнено'};
 const hits = {'':'Без метки',day:'Хит дня',week:'Хит недели',month:'Хит месяца',year:'Хит года'};
 const newsCategories=['Все','Продуктивность','Психология','Креативность','Маркетинг','Веб разработка','Дизайн','Хакинг','Новости IT','Другое'];
@@ -114,10 +318,13 @@ function openEditor(title, body, onSubmit = null, label = 'Сохранить') 
   dialogReturnFocus = document.activeElement;
   $('#editorTitle').textContent = title; $('#editorBody').innerHTML = body; $('#formError').textContent = '';
   $('#submitEditor').hidden = !onSubmit; $('#submitEditor').textContent = label; submitHandler = onSubmit;
+  editor.classList.remove('open','closing');
+  editor.classList.add('opening');
   if (!editor.open) editor.showModal();
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{editor.classList.remove('opening');editor.classList.add('open');}));
   $('input:not([type=file]),textarea,select', editor)?.focus();
 }
-function closeEditor() { editor.close(); dialogReturnFocus?.focus(); }
+function closeEditor() { editor.classList.remove('open');editor.classList.add('closing');setTimeout(()=>{editor.close();editor.classList.remove('closing');dialogReturnFocus?.focus();},260); }
 $('#closeEditor').onclick = closeEditor; $('#cancelEditor').onclick = closeEditor;
 editor.addEventListener('click', e => { if (e.target === editor && (e.clientX < editor.getBoundingClientRect().left || e.clientX > editor.getBoundingClientRect().right)) closeEditor(); });
 $('#editorForm').onsubmit = async e => {
@@ -131,10 +338,12 @@ function confirmDelete(label, callback) {
   openEditor('Удаление', `<p>Удалить «${escapeHtml(label)}»?</p>`, () => { callback(); saveAndRender(); }, 'Удалить');
 }
 function showView(view) {
+  if (view === 'admin' && !isOwner(currentAccount)) view = 'overview';
   activeView = view;
   $$('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`));
   $$('.nav-item').forEach(el => { el.classList.toggle('active', el.dataset.view === view); el.setAttribute('aria-current', el.dataset.view === view ? 'page' : 'false'); });
   $('#sidebar').classList.remove('open'); window.scrollTo({top:0,behavior:'smooth'});
+  if (view === 'admin') renderAdmin();
 }
 $$('.nav-item').forEach(el => el.onclick = () => showView(el.dataset.view));
 $$('[data-view-target]').forEach(el => el.onclick = () => showView(el.dataset.viewTarget));
@@ -179,17 +388,15 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && !accountMe
 const compliments = ['Ты умеешь двигаться вперёд — даже маленький шаг сегодня имеет значение.','Твоя настойчивость сильнее временных трудностей. Дай себе шанс начать.','У тебя есть всё, чтобы сделать этот день чуточку лучше.','Ты молодец: находить время для своих целей — уже важный шаг.','Твои идеи заслуживают воплощения. Начни с одного простого действия.','Ты растёшь с каждым шагом. Замечай и цени свой прогресс.','Тебе не нужно успеть всё. Выбери важное и позаботься о себе.'];
 function updateClock(refreshWeather = true) {
   if (!currentAccount) return;
-  const now = new Date(), zone = state.weather?.timezone || undefined;
-  const hour = +new Intl.DateTimeFormat('en-GB',{timeZone:zone,hour:'2-digit',hour12:false}).format(now);
-  $('#currentDate').textContent = now.toLocaleDateString('ru-RU',{weekday:'long',day:'numeric',month:'long',year:'numeric',timeZone:zone});
+  const now = new Date();
+  const hour = now.getHours();
+  $('#currentDate').textContent = now.toLocaleDateString('ru-RU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
   const greeting = hour < 5 ? 'Доброй ночи' : hour < 12 ? 'Доброе утро' : hour < 18 ? 'Добрый день' : 'Добрый вечер';
   $('#greetingTitle').textContent = greeting + (state.profile.name.trim() ? `, ${state.profile.name.trim().split(/\s+/)[0]}` : '') + ' ✦';
   $('#motivationalText').textContent = compliments[now.getDay()];
-  const zoned = new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now).reduce((o,p)=>(o[p.type]=p.value,o),{});
-  $('#dateBadgeDay').textContent = zoned.day;
-  $('#dateBadgeMonth').innerHTML = `${new Intl.DateTimeFormat('ru-RU',{month:'short',timeZone:zone}).format(now).toUpperCase()}<br>${zoned.year}`;
+  $('#dateBadgeDay').textContent = String(now.getDate()).padStart(2,'0');
+  $('#dateBadgeMonth').innerHTML = `${new Intl.DateTimeFormat('ru-RU',{month:'short'}).format(now).toUpperCase()}<br>${now.getFullYear()}`;
   $('#todayPlanDate').textContent = formatDate(today());
-  if (refreshWeather) updateWeather();
   if (clockDate !== today()) { clockDate = today(); renderAll(); }
 }
 let weatherRequest = 0, weatherUpdated = 0, weatherFailedAt = 0, weatherAttempts = 0;
@@ -210,14 +417,24 @@ function weatherIcon(code, desc = '') {
 }
 function weatherMarkup() {
   const weather = state.weather || {}, time = cityTime();
-  if (weather.temp != null) return `${weatherIcon(weather.code, weather.desc)} ${weather.city} · ${time} · ${Math.round(weather.temp)}°C`;
+  if (weather.temp != null) {
+    const parts = [`${weatherIcon(weather.code, weather.desc)} ${weather.city}`];
+    if (weather.desc) parts.push(weather.desc);
+    parts.push(time, `${Math.round(weather.temp)}°C`);
+    return parts.join(' · ');
+  }
   if (weatherFailedAt) return `☁ ${weather.city} · ${time} · нет данных`;
   return `⌁ ${weather.city} · ${time}`;
 }
 function updateWeatherWidget() {
   const widget = $('#weatherWidget'); if (!widget) return;
   widget.textContent = weatherMarkup();
-  widget.title = state.weather?.temp != null ? `${state.weather.desc || 'Погода сейчас'}. Нажми, чтобы выбрать город.` : weatherFailedAt ? 'Погода недоступна (нет сети). Нажми, чтобы выбрать город или обнови в настройках.' : 'Погода загружается…';
+  const updated = state.weather?.updated ? ` Обновлено в ${new Date(state.weather.updated).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}.` : '';
+  widget.title = state.weather?.temp != null
+    ? `${state.weather.desc || 'Погода сейчас'}.${updated} Нажми, чтобы выбрать город.`
+    : weatherFailedAt
+      ? 'Погода недоступна (нет сети). Нажми, чтобы выбрать город, или обнови кнопкой ↻ рядом.'
+      : 'Погода загружается…';
 }
 async function fetchWeatherJSON(url, timeout = 4500) {
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), timeout);
@@ -260,8 +477,58 @@ async function updateWeather(force = false) {
   }
 }
 function cityTime(){return new Intl.DateTimeFormat('ru-RU',{timeZone:state.weather?.timezone||undefined,hour:'2-digit',minute:'2-digit'}).format(new Date());}
-function applyTheme() { document.documentElement.dataset.theme = state.theme; $('#themeBtn').textContent = state.theme === 'light' ? '☾' : '☼'; }
-$('#themeBtn').onclick = () => { state.theme = state.theme === 'light' ? 'dark' : 'light'; applyTheme(); persist(); };
+function themeRgb(value) {
+  const hex=String(value||'').replace('#','').trim(), full=hex.length===3?hex.split('').map(char=>char+char).join(''):hex.padEnd(6,'0').slice(0,6), number=parseInt(full,16);
+  return Number.isFinite(number)?[number>>16&255,number>>8&255,number&255]:[118,169,255];
+}
+function mixThemeColor(base, tint, amount) {
+  return base.map((value,index)=>Math.max(0,Math.min(255,Math.round(value*(1-amount)+tint[index]*amount))));
+}
+function themeRgbCss(rgb) {
+  return `rgb(${rgb.join(',')})`;
+}
+function themeHsl(value) {
+  const [r,g,b]=themeRgb(value).map(channel=>channel/255), max=Math.max(r,g,b), min=Math.min(r,g,b), lightness=(max+min)/2;
+  let hue=0, saturation=0;
+  if(max!==min){const delta=max-min;saturation=lightness>.5?delta/(2-max-min):delta/(max+min);if(max===r)hue=(g-b)/delta+(g<b?6:0);else if(max===g)hue=(b-r)/delta+2;else hue=(r-g)/delta+4;hue*=60;}
+  return {hue,saturation:saturation*100,lightness:lightness*100};
+}
+function themeTone(hsl, shift=0, alpha=1) {
+  const hue=((hsl.hue+shift)%360+360)%360;
+  return `hsla(${hue.toFixed(1)}, ${hsl.saturation.toFixed(1)}%, ${hsl.lightness.toFixed(1)}%, ${alpha})`;
+}
+function applyTheme() {
+  const light = state.theme === 'light';
+  document.documentElement.dataset.theme = state.theme;
+  const themeBtn = $('#themeBtn'); if (themeBtn) themeBtn.textContent = light ? '☾' : '☼';
+  const color = '#76a9ff', accent = themeRgb(color), hsl = themeHsl(color);
+  document.documentElement.style.setProperty('--blue', color);
+  document.documentElement.style.setProperty('--accent-ink', light ? '#3e72c9' : '#76a9ff');
+  document.documentElement.style.setProperty('--accent-contrast', '#fff');
+  document.documentElement.style.setProperty('--accent-2', themeTone(hsl,46));
+  document.documentElement.style.setProperty('--accent-3', themeTone(hsl,-52));
+  document.documentElement.style.setProperty('--accent-gradient', `linear-gradient(135deg, ${themeTone(hsl,38)}, ${color} 48%, ${themeTone(hsl,-42)})`);
+  if (light) {
+    // Белая тема остаётся без изменений.
+    const base = {bg:'#f3f6fb',sidebar:'#eaf0f8',panel:'#ffffff',panel2:'#f5f8fc',line:'#d2dce9'};
+    const weights = {bg:.12,sidebar:.18,panel:.06,panel2:.10,line:.22};
+    for (const key of ['bg','sidebar','panel','panel2','line']) document.documentElement.style.setProperty(`--${key}`,themeRgbCss(mixThemeColor(themeRgb(base[key]),accent,weights[key])));
+    const textStyles = {text:['#141c2a',.04],muted:['#4b596e',.14],dim:['#4f5c70',.10]};
+    for (const [key,[baseColor,amount]] of Object.entries(textStyles)) document.documentElement.style.setProperty(`--${key}`,themeRgbCss(mixThemeColor(themeRgb(baseColor),accent,amount)));
+    const glow=.20, glow2=.14;
+    document.documentElement.style.setProperty('--bg-gradient', `radial-gradient(circle at 14% 18%, ${themeTone(hsl,0,glow)} 0%, transparent 54%), radial-gradient(circle at 86% 14%, ${themeTone(hsl,54,glow2)} 0%, transparent 52%), radial-gradient(circle at 52% 92%, ${themeTone(hsl,-58,glow2)} 0%, transparent 58%)`);
+  } else {
+    // Тёмная тема возвращена к исходному виду.
+    const base = {bg:'#0d1017',sidebar:'#11151d',panel:'#151a23',panel2:'#191f29',line:'#29303b'};
+    const weights = {bg:.13,sidebar:.18,panel:.10,panel2:.13,line:.24};
+    for (const key of ['bg','sidebar','panel','panel2','line']) document.documentElement.style.setProperty(`--${key}`,themeRgbCss(mixThemeColor(themeRgb(base[key]),accent,weights[key])));
+    const textStyles = {text:['#f4f5f8',.05],muted:['#8b93a3',.12],dim:['#626b7b',.14]};
+    for (const [key,[baseColor,amount]] of Object.entries(textStyles)) document.documentElement.style.setProperty(`--${key}`,themeRgbCss(mixThemeColor(themeRgb(baseColor),accent,amount)));
+    const glow=.26, glow2=.19;
+    document.documentElement.style.setProperty('--bg-gradient', `radial-gradient(circle at 14% 18%, ${themeTone(hsl,0,glow)} 0%, transparent 54%), radial-gradient(circle at 86% 14%, ${themeTone(hsl,54,glow2)} 0%, transparent 52%), radial-gradient(circle at 52% 92%, ${themeTone(hsl,-58,glow2)} 0%, transparent 58%)`);
+  }
+}
+$('#themeBtn').onclick = () => { state.theme = state.theme === 'light' ? 'dark' : 'light'; applyTheme(); persist(); logAction('переключил тему', state.theme === 'light' ? 'Светлая тема' : 'Тёмная тема'); };
 applyTheme();
 
 function editTask(id, date = today()) {
@@ -282,6 +549,7 @@ function editTask(id, date = today()) {
       const record = {...value,id:task?.id || uid(),title,date:chosen,time:String(data.get('time')),priority:String(data.get('priority')),progress,goal:String(data.get('goal')||'')};
       record.activityDate = progress ? (task?.progress === progress ? task.activityDate : today()) : null;
       if (task) state.tasks[state.tasks.indexOf(task)] = record; else state.tasks.push(record);
+      logAction(task?'изменил задачу':'создал задачу',`«${title}» · ${formatDate(chosen)}`,record.id);
       saveAndRender(); toast(task ? 'Задача обновлена' : 'Задача добавлена');
     }, task ? 'Сохранить' : 'Добавить');
 }
@@ -385,7 +653,7 @@ function renderCalendar() {
   const days = new Date(calendarYear,calendarMonth+1,0).getDate();
   let html = '<span></span>'.repeat(start);
   for(let day=1;day<=days;day++) {
-    const key = dateKey(new Date(calendarYear,calendarMonth,day)), count = state.tasks.filter(task=>task.date===key).length;
+    const key = `${calendarYear}-${String(calendarMonth+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`, count = state.tasks.filter(task=>task.date===key).length;
     html += `<button class="calendar-cell ${key===today()?'today':''} ${key===selectedDate?'selected':''} ${key<today()?'past':''}" data-action="calendar-select" data-id="${key}" aria-pressed="${key===selectedDate}" aria-label="${formatDate(key)}, задач: ${count}">${day}${count?'<i class="event-dot"></i>':''}</button>`;
   }
   $('#calendarGrid').innerHTML = html;
@@ -406,6 +674,7 @@ function editGoal(id) {
     const progress=+data.get('progress');
     const record={id:goal?.id||uid(),title,description:String(data.get('description')).trim(),date:String(data.get('date')),progress,activityDate:progress?(goal?.progress===progress?goal.activityDate:today()):null};
     if(goal) state.goals[state.goals.indexOf(goal)]=record; else state.goals.push(record);
+    logAction(goal?'изменил цель':'создал цель',`«${title}»`,record.id);
     saveAndRender(); toast('Цель сохранена');
   });
 }
@@ -444,12 +713,14 @@ function renderProfile() {
   profileMediaRender();
   const card=$('#profileCard');
   if(card)card.classList.toggle('row-view',state.profile.layout==='row');
-  const layoutToggle=$('#profileLayoutToggle');
-  if(layoutToggle){layoutToggle.textContent=state.profile.layout==='row'?'▤':'☰';layoutToggle.title=state.profile.layout==='row'?'Показать стандартный вид':'Показать компактный вид';}
+  $$('[data-profile-tool="layout"]').forEach(b=>{b.textContent=state.profile.layout==='row'?'▤':'☰';b.title=state.profile.layout==='row'?'Показать стандартный вид':'Показать компактный вид';});
   $('.user-mini strong').textContent=state.profile.name||'Мой профиль';
-  $('.profile-body h2').textContent=state.profile.name||'Твоё имя';
-  $('.profile-body>p').textContent=`${state.profile.ownerPrefix||'Владелец'} · @${state.profile.alias||'без_псевдонима'}`;
-  $('.profile-status').textContent=state.profile.status||'✦ В своём ритме';
+  $('#profileName').textContent=state.profile.name||'Твоё имя';
+  const owner=isOwner(currentAccount);
+  const prefix=$('#profileOwner');
+  if(prefix){prefix.hidden=!owner;prefix.textContent=state.profile.status||'✦ В своём ритме';}
+  $('#profileAliasLine').textContent=`@${state.profile.alias||'без_псевдонима'}`;
+  $$('.profile-status').forEach(el=>el.remove());
   const favorites=state.tracks.filter(track=>track.favorite);
   $('#favoriteTrackCount').textContent=`${favorites.length} сохранено`;
   $('#profileFavorites').innerHTML=favorites.slice(0,3).map(track=>`<button class="profile-favorite" data-action="track-play" data-id="${track.id}"><span>♪</span><strong>${escapeHtml(track.title)}</strong><small>${escapeHtml(track.artist||'Исполнитель не указан')}</small></button>`).join('');
@@ -464,16 +735,134 @@ function renderProfile() {
   $('.stat-callout small').textContent='Выполненная задача или цель = 1 балл; наполовину = 0,5. Учитывается последняя дата изменения прогресса.';
   updateClock(false);
 }
+function newsAllItems(){
+  const seen=new Set();
+  return [...(state.newsCustom||[]),...(state.newsFeed||[]),...newsItems].filter(item=>{
+    if(!item||!item.title)return false;
+    const key=String(item.url||item.title);
+    if(seen.has(key))return false;
+    seen.add(key);return true;
+  });
+}
 function renderNews() {
+  const all=newsAllItems();
   const select=$('#newsCategorySelect');
   if(select){
-    select.innerHTML=newsCategories.map(category=>`<option value="${escapeHtml(category)}" ${category===newsFilter?'selected':''}>${escapeHtml(category)}</option>`).join('');
+    const categories=[...new Set(['Все',...newsCategories.slice(1),...all.map(item=>item.category).filter(Boolean)])];
+    select.innerHTML=categories.map(category=>`<option value="${escapeHtml(category)}" ${category===newsFilter?'selected':''}>${escapeHtml(category)}</option>`).join('');
     select.value=newsFilter;
   }
-  const items=newsItems.filter(item=>newsFilter==='Все'||item.category===newsFilter);
-  $('#newsList').innerHTML=items.map((item,index)=>`<article class="news-card card ${index===0?'featured-news':''}"><div class="article-icon ${index%2?'blue':'orange'}">${index%2?'⌁':'✦'}</div><div class="news-content"><div class="news-meta"><span>${escapeHtml(item.category.toUpperCase())}</span><small>${escapeHtml(item.source)}</small></div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.description)}</p><a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">Читать источник →</a></div></article>`).join('');
+  const sourceSelect=$('#newsSourceSelect');
+  if(sourceSelect){
+    const sources=['Все',...new Set([...all.map(item=>item.source),...(state.newsSources||[]).map(source=>typeof source==='string'?source:source.name)].filter(Boolean))];
+    if(!sources.includes(newsSource))newsSource='Все';
+    sourceSelect.innerHTML=sources.map(source=>`<option value="${escapeHtml(source)}" ${source===newsSource?'selected':''}>${escapeHtml(source)}</option>`).join('');
+    sourceSelect.value=newsSource;
+  }
+  const items=all.filter(item=>(newsFilter==='Все'||item.category===newsFilter)&&(newsSource==='Все'||item.source===newsSource)).slice(0,50);
+  $('#newsList').innerHTML=items.length?items.map((item,index)=>`<article class="news-card card ${index===0?'featured-news':''}"><div class="article-icon ${item.image?'news-thumb':' '+(index%2?'blue':'orange')}" ${item.image?`style="background-image:url('${escapeHtml(item.image)}')"`:''}>${item.image?'':(index%2?'⌁':'✦')}</div><div class="news-content"><div class="news-meta"><span>${escapeHtml(String(item.category||'Другое').toUpperCase())}</span><small>${escapeHtml(item.source||'Источник')}</small></div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.description||'')}</p><a href="${escapeHtml(item.url||'#')}" target="_blank" rel="noopener noreferrer">Читать источник →</a></div></article>`).join(''):empty('По выбранным фильтрам новостей нет. Добавь источник или новость по ссылке.');
   const count=(state.newsSources||[]).length;
   $('#manageSources').textContent=count?`Мои источники · ${count}`:'Мои источники';
+}
+// --- External content (news links, music links) -------------------------
+// Static app: CORS blocks direct page reads, so try public read-only proxies.
+async function fetchExternalText(url, timeout = 6000) {
+  let sameOrigin = false;
+  try { sameOrigin = new URL(url).origin === location.origin; } catch {}
+  const attempts = [
+    ...(sameOrigin ? [() => url] : []),
+    value => `https://api.allorigins.win/raw?url=${encodeURIComponent(value)}`,
+    value => `https://corsproxy.io/?url=${encodeURIComponent(value)}`,
+    value => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(value)}`
+  ];
+  let lastError;
+  for (const make of attempts) {
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), timeout);
+    try {
+      const response = await fetch(make(url), {signal:controller.signal, headers:{'Accept':'text/html,application/xhtml+xml,application/xml,application/json;q=0.9,*/*;q=0.8'}});
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const text = await response.text();
+      if (text && text.trim().length > 40) return text;
+    } catch (error) { lastError = error; }
+    finally { clearTimeout(timer); }
+  }
+  throw lastError || new Error('Сервис не отдал данные.');
+}
+async function fetchExternalJSON(url, timeout = 8000) {
+  const text = await fetchExternalText(url, timeout);
+  try { return JSON.parse(text); } catch { throw new Error('Некорректный ответ сервиса.'); }
+}
+const stripHtml = value => {
+  const box = document.createElement('div');
+  box.innerHTML = String(value || '').replace(/<br\s*\/?>/gi, ' ');
+  return (box.textContent || '').replace(/\s+/g, ' ').trim();
+};
+const absoluteUrl = (value, base) => { try { return new URL(value, base).href; } catch { return ''; } };
+function metaFromHtml(html, baseUrl) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const content = selector => doc.querySelector(selector)?.getAttribute('content')?.trim() || '';
+  const title = content('meta[property="og:title"]') || content('meta[name="twitter:title"]') || doc.querySelector('article h1')?.textContent?.trim() || doc.title?.trim() || doc.querySelector('main h1')?.textContent?.trim() || doc.querySelector('h1')?.textContent?.trim() || '';
+  const description = content('meta[property="og:description"]') || content('meta[name="twitter:description"]') || content('meta[name="description"]') || [...doc.querySelectorAll('article p,main p')].map(node=>node.textContent).join(' ').slice(0,900) || '';
+  return {
+    title: stripHtml(title),
+    description: stripHtml(description).slice(0, 900),
+    image: absoluteUrl(content('meta[property="og:image"]') || content('meta[name="twitter:image"]'), baseUrl),
+    audioUrl: absoluteUrl(content('meta[property="og:audio"]') || content('meta[property="og:audio:url"]'), baseUrl),
+    embedHtml: content('meta[property="og:video:url"]') || ''
+  };
+}
+async function articleMetaFromUrl(url) {
+  let meta = null;
+  try { meta = metaFromHtml(await fetchExternalText(url), url); } catch {}
+  if (!meta?.title || meta.title.length < 3) {
+    try {
+      const text = await (await fetch(`https://r.jina.ai/${url}`)).text();
+      const title = (text.match(/^Title:\s*(.+)$/m) || [])[1] || (text.match(/^#\s+(.+)$/m) || [])[1] || '';
+      const body = text.replace(/^Title:.*$/m, '').replace(/^URL Source:.*$/m, '').replace(/^Markdown Content:/m, '').replace(/#+\s*/g, ' ').trim();
+      meta = {title:stripHtml(title), description:stripHtml(body).slice(0, 900), image:'', audioUrl:''};
+    } catch {}
+  }
+  if (!meta?.title) throw new Error('Не удалось прочитать ссылку. Проверь адрес или попробуй другую статью.');
+  return {id:uid(), title:meta.title, description:meta.description, image:meta.image || '', url, source:new URL(url).hostname.replace(/^www\./,''), category:'Другое', created:Date.now()};
+}
+async function sourceItems(source) {
+  const text = await fetchExternalText(source.url);
+  const doc = new DOMParser().parseFromString(text, 'text/xml');
+  const nodes = [...doc.querySelectorAll('item, entry')];
+  const items = [];
+  for (const node of nodes.slice(0, 12)) {
+    const title = stripHtml(node.querySelector('title')?.textContent || '');
+    const linkNode = node.querySelector('link');
+    const link = absoluteUrl(linkNode?.getAttribute('href') || linkNode?.textContent || '', source.url);
+    const description = stripHtml(node.querySelector('description, summary, content')?.textContent || '').slice(0, 600);
+    if (title && link) items.push({id:uid(), title, description, url:link, source:source.name, sourceUrl:source.url, category:'Другое', created:Date.now()});
+  }
+  if (items.length) return items;
+  const htmlDoc = new DOMParser().parseFromString(text, 'text/html');
+  const links = [...htmlDoc.querySelectorAll('article a[href], main a[href], h2 a[href], h3 a[href]')].slice(0, 10);
+  const seen = new Set();
+  for (const link of links) {
+    const title = stripHtml(link.textContent);
+    const href = absoluteUrl(link.getAttribute('href'), source.url);
+    if (!title || title.length < 8 || !href || seen.has(href)) continue;
+    seen.add(href);
+    items.push({id:uid(), title, description:'', url:href, source:source.name, sourceUrl:source.url, category:'Другое', created:Date.now()});
+  }
+  if (items.length) return items;
+  const meta = metaFromHtml(text, source.url);
+  if (!meta.title) throw new Error('На странице источника не найдено новостей.');
+  return [{id:uid(), title:meta.title, description:meta.description, image:meta.image, url:source.url, source:source.name, sourceUrl:source.url, category:'Другое', created:Date.now()}];
+}
+async function refreshNewsSource(source) {
+  try {
+    const items = await sourceItems(source);
+    state.newsFeed = [...(state.newsFeed || []).filter(item => item.sourceUrl !== source.url), ...items].slice(-160);
+    persist(); renderNews();
+    return items.length;
+  } catch (error) {
+    toast(`Не удалось загрузить «${source.name}»: ${error.message || 'нет доступа'}`, true);
+    return 0;
+  }
 }
 async function timezoneFor(latitude, longitude) {
   try {
@@ -505,9 +894,24 @@ async function chooseWeatherCity() {
     state.weather={city:place.name,lat:place.latitude,lon:place.longitude,timezone:place.timezone || state.weather.timezone,temp:null,code:null,desc:'',updated:0};weatherUpdated=0;weatherFailedAt=0;weatherAttempts=0;persist();updateSettingsCity();updateClock(false);updateWeather(true);toast(`Город изменён: ${place.name}`);
   },'Выбрать город');
 }
-$('#weatherWidget').onclick=chooseWeatherCity;
+window.addEventListener('online',()=>{if(currentAccount){weatherUpdated=0;weatherFailedAt=0;weatherAttempts=0;}});
 $('#newsCategorySelect')?.addEventListener('change', e=>{newsFilter=e.target.value;renderNews();});
-$('#addNewsSource').onclick=()=>openEditor('Добавить источник',field('Название',input('name','','text','required maxlength="80"'))+field('Ссылка',input('url','','url','required placeholder="https://"')),data=>{const name=String(data.get('name')).trim(),url=String(data.get('url')).trim();try{new URL(url);}catch{throw new Error('Введите корректную ссылку.');}state.newsSources=[...(state.newsSources||[]),{name,url}];persist();renderNews();toast('Источник добавлен');});
+$('#newsSourceSelect')?.addEventListener('change', e=>{newsSource=e.target.value;renderNews();});
+$('#addNews').onclick=()=>openEditor('Добавить новость по ссылке',field('Ссылка на статью',input('url','','url','required placeholder="https://"'))+field('Тема',`<select name="category">${newsCategories.filter(c=>c!=='Все').map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}</select>`)+'<p class="help-text">Название, текст и обложка берутся со страницы по ссылке.</p>',async data=>{
+  const url=String(data.get('url')).trim();try{const parsed=new URL(url);if(!/^https?:$/.test(parsed.protocol))throw new Error();}catch{throw new Error('Введите корректную ссылку.');}
+  const item=await articleMetaFromUrl(url);
+  item.category=String(data.get('category')||'Другое');
+  state.newsCustom=[item,...(state.newsCustom||[]).filter(entry=>entry.url!==url)].slice(0,80);
+  persist();renderNews();toast('Новость добавлена');
+});
+$('#addNewsSource').onclick=()=>openEditor('Добавить источник',field('Название',input('name','','text','maxlength="80" placeholder="Можно оставить пустым"'))+field('Ссылка на сайт или RSS',input('url','','url','required placeholder="https://"')),async data=>{
+  const url=String(data.get('url')).trim();try{const parsed=new URL(url);if(!/^https?:$/.test(parsed.protocol))throw new Error();}catch{throw new Error('Введите корректную ссылку.');}
+  const name=String(data.get('name')).trim()||new URL(url).hostname.replace(/^www\./,'');
+  const source={name,url};
+  state.newsSources=[...(state.newsSources||[]).filter(item=>item.url!==url),source];persist();renderNews();
+  toast('Источник добавлен, загружаю новости…');
+  refreshNewsSource(source).then(count=>{if(count)toast(`Новости обновлены: ${count}`);});
+});
 function sourcesEditor(){
   const custom=(state.newsSources||[]).map((source,index)=>{const item=typeof source==='string'?(()=>{const [name,url]=source.split(' · ');return {name:name||url,url:url||''};})():source;return `<div class="manage-row"><span>${escapeHtml(item.name||'Источник')}</span><button class="text-btn" type="button" data-remove-source="${index}">Удалить</button></div>`;}).join('');
   openEditor('Мои источники',custom||empty('Пока добавлены только встроенные источники.'));
@@ -655,7 +1059,9 @@ function editProfile() {
   const durationHint=duration?`Длительность загруженного видео: ${duration.toFixed(1)} сек.`:'Видео ещё не загружено. Можно загрузить видео до минуты.';
   const scale=Math.min(2.5,Math.max(1,+state.profile.photoScale||1));
   const photoBlock='<div class="photo-editor"><div class="photo-crop" id="photoCrop"><img id="photoCropImage" alt="Область аватара"><span class="photo-crop-hint" id="photoCropHint">Перетащи фото, чтобы выбрать область</span></div><label class="photo-zoom">Масштаб<input type="range" id="photoScale" min="1" max="2.5" step="0.01" value="'+scale+'"></label><p class="help-text">Перетаскивай фотографию внутри круга и меняй масштаб — так она будет обрезана для аватара.</p></div>';
-  openEditor('Изменить профиль',field('Префикс владельца',input('ownerPrefix',state.profile.ownerPrefix||'Владелец','text','maxlength="30"'))+field('Имя',input('name',state.profile.name,'text','required maxlength="80" autocomplete="name"'))+field('Псевдоним',input('alias',state.profile.alias,'text','maxlength="40"'))+field('Эмодзи-статус',input('status',state.profile.status||'✦ В своём ритме','text','maxlength="60"'))+field('Фотография',input('photo','','file','accept="image/*"'))+photoBlock+field('Видео-фон',input('video','','file','accept="video/*"'))+`<p class="help-text" id="videoDurationHint">${durationHint} Видео будет проигрываться целиком, без обрезки.</p>`+'<div class="video-preview" id="videoPreviewWrap" hidden><video id="profileVideoPreview" muted playsinline controls></video></div>'+'<label class="checkbox-label"><input type="checkbox" name="removePhoto"> Удалить фото</label><label class="checkbox-label"><input type="checkbox" name="removeVideo"> Удалить видео</label>',async data=>{
+  const ownerAccount=isOwner(currentAccount);
+  const ownerStatusField=ownerAccount?field('Статус (префикс)',input('status',state.profile.status||'✦ В своём ритме','text','maxlength="60"')):'';
+  openEditor('Изменить профиль',ownerStatusField+field('Имя',input('name',state.profile.name,'text','required maxlength="80" autocomplete="name"'))+field('Псевдоним',input('alias',state.profile.alias,'text','maxlength="40"'))+field('Фотография',input('photo','','file','accept="image/*"'))+photoBlock+field('Видео-фон',input('video','','file','accept="video/*"'))+`<p class="help-text" id="videoDurationHint">${durationHint} Видео будет проигрываться целиком, без обрезки.</p>`+'<div class="video-preview" id="videoPreviewWrap" hidden><video id="profileVideoPreview" muted playsinline controls></video></div>'+'<label class="checkbox-label"><input type="checkbox" name="removePhoto"> Удалить фото</label><label class="checkbox-label"><input type="checkbox" name="removeVideo"> Удалить видео</label>',async data=>{
     const name=String(data.get('name')).trim();if(!name)throw new Error('Введите имя.');
     const newPhoto=await imageData(data.get('photo'));
     const removePhoto=data.has('removePhoto');
@@ -665,23 +1071,36 @@ function editProfile() {
     if(data.has('removeVideo')){video='';videoDuration=0;}
     else if(videoFile?.size){const info=await videoData(videoFile);video=info.key;videoDuration=info.duration;}
     const previousVideo=state.profile.video;
-    state.profile={...state.profile,ownerPrefix:String(data.get('ownerPrefix')).trim()||'Владелец',name,alias:String(data.get('alias')).trim().replace(/^@/,''),status:String(data.get('status')).trim()||'✦ В своём ритме',photo,photoX:photo?cropState.x:50,photoY:photo?cropState.y:50,photoScale:photo?cropState.scale:1,video,videoStart:0,videoEnd:0,videoDuration:video?videoDuration:0};
+    const newStatus=ownerAccount?(String(data.get('status')).trim()||'✦ В своём ритме'):state.profile.status;
+    state.profile={...state.profile,name,alias:String(data.get('alias')).trim().replace(/^@/,''),status:newStatus,photo,photoX:photo?cropState.x:50,photoY:photo?cropState.y:50,photoScale:photo?cropState.scale:1,video,videoStart:0,videoEnd:0,videoDuration:video?videoDuration:0};
     if(previousVideo&&previousVideo!==video)audioStore('delete',previousVideo).catch(()=>{});
+    logAction('обновил профиль',name);
     saveAndRender();toast('Профиль сохранён');
   });
   initPhotoCrop();
   loadProfileVideoPreview();
 }
-$('#editProfileBtn').onclick=editProfile;
-$('#profileLayoutToggle').onclick=()=>{state.profile.layout=state.profile.layout==='row'?'card':'row';persist();renderProfile();toast(state.profile.layout==='row'?'Компактный вид профиля':'Стандартный вид профиля');};
+$$('[data-profile-tool="edit"]').forEach(b=>b.onclick=editProfile);
+$$('[data-profile-tool="layout"]').forEach(b=>b.onclick=()=>{
+  const next=state.profile.layout==='row'?'card':'row';
+  const toggle=()=>{state.profile.layout=next;persist();renderProfile();};
+  if(document.startViewTransition&&!matchMedia('(prefers-reduced-motion: reduce)').matches){
+    document.startViewTransition(toggle);
+  }else if(!matchMedia('(prefers-reduced-motion: reduce)').matches){
+    const card=$('#profileCard');
+    card.classList.add('layout-switching');
+    setTimeout(()=>{toggle();requestAnimationFrame(()=>card.classList.remove('layout-switching'));},170);
+  }else toggle();
+  toast(next==='row'?'Компактный вид профиля':'Стандартный вид профиля');
+});
 
 function renderHabits() {
   $$('.habit-card>.habit-row').forEach(el=>el.remove());
   $('.habit-card').insertAdjacentHTML('beforeend',state.habits.length?state.habits.map(h=>`<div class="habit-row"><span class="habit-icon blue">◒</span><div><strong>${escapeHtml(h.name)}</strong><span>${h.days.length} дней отмечено</span></div><button class="habit-check ${h.days.includes(today())?'done':''}" data-action="habit-toggle" data-id="${h.id}" aria-label="${escapeHtml(h.name)}" aria-pressed="${h.days.includes(today())}">${h.days.includes(today())?'✓':'○'}</button></div>`).join(''):empty('Добавь полезную привычку.'));
 }
-$('#habitMore').onclick=()=>openEditor('Мои привычки',state.habits.map(h=>`<div class="manage-row">${escapeHtml(h.name)}${button('habit-delete',h.id,'Удалить','text-btn')}</div>`).join('')+field('Новая привычка',input('name','','text','required maxlength="100"')),data=>{const name=String(data.get('name')).trim();if(!name)throw new Error('Введите название.');state.habits.push({id:uid(),name,days:[]});saveAndRender();},'Добавить');
+$('#habitMore').onclick=()=>openEditor('Мои привычки',state.habits.map(h=>`<div class="manage-row">${escapeHtml(h.name)}${button('habit-delete',h.id,'Удалить','text-btn')}</div>`).join('')+field('Новая привычка',input('name','','text','required maxlength="100"')),data=>{const name=String(data.get('name')).trim();if(!name)throw new Error('Введите название.');const habit={id:uid(),name,days:[]};state.habits.push(habit);logAction('добавил привычку',name,habit.id);saveAndRender();},'Добавить');
 $('#openFavorites').onclick=()=>{showView('music');selectedPlaylist='favorites';renderMusic();};
-$('#noteBtn').onclick=()=>openEditor('Быстрая заметка',field('Твои идеи',`<textarea name="note" rows="10" maxlength="20000">${escapeHtml(state.note)}</textarea>`),data=>{state.note=String(data.get('note'));persist();toast('Заметка сохранена');});
+$('#noteBtn').onclick=()=>openEditor('Быстрая заметка',field('Твои идеи',`<textarea name="note" rows="10" maxlength="20000">${escapeHtml(state.note)}</textarea>`),data=>{state.note=String(data.get('note'));logAction('сохранил заметку',`${state.note.length} символов`);persist();toast('Заметка сохранена');});
 $('#quoteBtn').onclick=()=>{ const index=(Number($('#quoteBtn').dataset.index||0)+1)%compliments.length;$('#quoteBtn').dataset.index=index;$('.quote-card p').textContent=compliments[index];$('.quote-card>span').textContent='— Напоминание себе'; };
 
 let focusRemaining=1500,focusEnd=0,focusRunning=false,breathStart=0;
@@ -697,6 +1116,16 @@ setInterval(()=>{
   if(breathStart&&$('#breathCircle')) {const elapsed=(Date.now()-breathStart)/1000;const inhale=elapsed%10<4;$('#breathCircle').textContent=elapsed>=120?'Готово':inhale?'Вдох':'Выдох';$('#breathCircle').classList.toggle('inhale',inhale);$('#breathText').textContent=elapsed>=120?'Перезагрузка завершена. Возвращайся в своём темпе.':`Осталось ${Math.ceil(120-elapsed)} сек. · ${inhale?'Вдох 4 секунды':'Выдох 6 секунд'}`;if(elapsed>=120)breathStart=0;}
 },250);
 setInterval(updateClock,15000);
+// Real-time clock: refreshes the time display every 1 ms (only DOM write when the string changes).
+let _clockFmt=null;
+function tickLiveClock(){
+  const el=$('#liveClock'); if(!el) return;
+  if(!currentAccount){ el.textContent='--:--:--'; return; }
+  if(!_clockFmt||_clockFmt.zone!=='local'){ _clockFmt={zone:'local',fmt:new Intl.DateTimeFormat('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}; }
+  const text=_clockFmt.fmt.format(new Date());
+  if(el.textContent!==text) el.textContent=text;
+}
+setInterval(tickLiveClock,1000);
 
 // Audio blobs persist in IndexedDB, metadata in localStorage.
 let dbPromise;
@@ -721,105 +1150,513 @@ async function embeddedCover(file) {
     }offset+=10+size;
   }return '';
 }
-const audio=new Audio();audio.preload='metadata';let objectURL='',playGeneration=0;
+const audio=new Audio();audio.preload='metadata';let objectURL='',playGeneration=0,embedPlaying=false;
+let audioContext=null,analyserNode=null,mediaSourceNode=null,mediaStream=null,captureTimer=0,fakeAuraTimer=0,vizRAF=0,vizFreq=null,vizBpm=0,vizBeatAvg=0,vizLastOnset=0,vizOnsets=[],vizSilent=0,vizBeatPulse=0,vizEnergy=0;
+function trackHash(track){return [...String(track?.id||track?.title||'')].reduce((hash,char)=>((hash<<5)-hash+char.charCodeAt(0))|0,0)>>>0;}
+function syntheticMeta(track){return {bpm:88+trackHash(track)%55};}
+function connectAudioStream(){
+  if(typeof audio.captureStream!=='function')return false;
+  try{
+    mediaSourceNode?.disconnect();
+    mediaStream=audio.captureStream();
+    if(!mediaStream||!mediaStream.getAudioTracks().length)return false;
+    mediaSourceNode=audioContext.createMediaStreamSource(mediaStream);
+    mediaSourceNode.connect(analyserNode);
+    return true;
+  }catch{return false;}
+}
+function ensureAudioGraph(){
+  const Ctx=window.AudioContext||window.webkitAudioContext;
+  if(!audioContext){
+    if(!Ctx)return false;
+    try{
+      audioContext=new Ctx();analyserNode=audioContext.createAnalyser();analyserNode.fftSize=2048;analyserNode.smoothingTimeConstant=.8;
+      vizFreq=new Uint8Array(analyserNode.frequencyBinCount);
+      const silent=audioContext.createGain();silent.gain.value=0;
+      analyserNode.connect(silent);silent.connect(audioContext.destination);
+    }catch{return false;}
+  }
+  const track=mediaStream?.getAudioTracks?.()[0];
+  if(!track||track.readyState==='ended'||audio.currentTime<0.2){
+    clearTimeout(captureTimer);
+    captureTimer=setTimeout(()=>{connectAudioStream();},320);
+  }
+  if(audioContext.state==='suspended')audioContext.resume().catch(()=>{});
+  return true;
+}
+function auraHue(){
+  return 228;
+}
+function setAuraVars(bpm,energy=0.45){
+  const hero=$('#musicHero');if(!hero)return;
+  const hue=auraHue();
+  if(hero.dataset.auraHue!==String(hue)){
+    hero.style.setProperty('--aura-hue',hue);
+    hero.style.setProperty('--aura-hue2',(hue+72)%360);
+    hero.dataset.auraHue=String(hue);
+  }
+  const speed=`${Math.max(1.6,260/Math.max(60,bpm)).toFixed(2)}s`;
+  if(hero.dataset.auraSpeed!==speed){hero.style.setProperty('--aura-speed',speed);hero.dataset.auraSpeed=speed;}
+  const value=String(Math.round(Math.min(1,Math.max(.18,energy))*100)/100);
+  if(hero.dataset.auraEnergy!==value){hero.style.setProperty('--aura-energy',value);hero.dataset.auraEnergy=value;}
+  const meta=$('#musicMeta');if(meta){const label=bpm?`${Math.round(bpm)} BPM`:'';if(meta.textContent!==label)meta.textContent=label;}
+}
+function startAura(track,{synthetic=false}={}){
+  const hero=$('#musicHero');if(!hero||!track)return;
+  clearInterval(fakeAuraTimer);fakeAuraTimer=0;
+  document.body.classList.add('music-reactive');hero.classList.add('aura-on');
+  const fallback=syntheticMeta(track);
+  vizEnergy=.42;vizBeatPulse=0;
+  setAuraVars(fallback.bpm,.42);
+  if(synthetic||!ensureAudioGraph()){
+    clearInterval(fakeAuraTimer);
+    fakeAuraTimer=setInterval(()=>{
+      if(!embedPlaying&&audio.paused){clearInterval(fakeAuraTimer);fakeAuraTimer=0;return;}
+      vizBeatPulse=vizBeatPulse>.12?0:1;
+      setAuraVars(fallback.bpm,.42);
+    },Math.max(220,60000/Math.max(60,fallback.bpm)/2));
+    return;
+  }
+  cancelAnimationFrame(vizRAF);vizBpm=0;vizOnsets=[];vizLastOnset=0;vizBeatAvg=0;vizSilent=0;vizBeatPulse=0;vizEnergy=.42;
+  const loop=()=>{
+    if(audio.paused){vizRAF=0;return;}
+    analyserNode.getByteFrequencyData(vizFreq);
+    let bass=0,total=0;const length=vizFreq.length;
+    for(let i=0;i<length;i++){const value=vizFreq[i];total+=value;if(i<8)bass+=value;}
+    bass/=8;const energy=total/length/255;
+    const now=performance.now();
+    if(bass>vizBeatAvg*1.18&&now-vizLastOnset>190){vizOnsets.push(now);if(vizOnsets.length>18)vizOnsets.shift();vizLastOnset=now;vizBeatPulse=1;}
+    vizBeatAvg=vizBeatAvg?vizBeatAvg*.93+bass*.07:bass;vizBeatPulse*=.9;
+    vizEnergy=vizEnergy?vizEnergy*.88+energy*.12:energy;
+    if(vizOnsets.length>=5){
+      const intervals=vizOnsets.slice(1).map((time,index)=>time-vizOnsets[index]).sort((a,b)=>a-b);
+      const median=intervals[Math.floor(intervals.length/2)];
+      if(median>0){let bpm=60000/median;while(bpm<70)bpm*=2;while(bpm>170)bpm/=2;vizBpm=vizBpm?vizBpm*.9+bpm*.1:bpm;}
+    }
+    setAuraVars(vizBpm||fallback.bpm,vizEnergy);
+    if(total===0&&++vizSilent>100){setAuraVars(fallback.bpm,.35);vizRAF=0;return;}
+    vizRAF=requestAnimationFrame(loop);
+  };
+  vizRAF=requestAnimationFrame(loop);
+}
+function stopAura(){
+  cancelAnimationFrame(vizRAF);vizRAF=0;clearInterval(fakeAuraTimer);fakeAuraTimer=0;
+  document.body.classList.remove('music-reactive');$('#musicHero')?.classList.remove('aura-on');
+  const hero=$('#musicHero');if(hero){delete hero.dataset.auraHue;delete hero.dataset.auraSpeed;delete hero.dataset.auraEnergy;}
+  const meta=$('#musicMeta');if(meta)meta.textContent='';
+}
 function coverMarkup(track,cls='track-cover') {return track?.cover?`<img class="${cls}" src="${escapeHtml(track.cover)}" alt="Обложка ${escapeHtml(track.title)}">`:`<span class="${cls} no-cover" title="Обложка не добавлена">♪</span>`;}
 function renderMusic() {
   $('#musicHero').classList.toggle('empty-player', !currentTrack);
-  $('#playlistGrid').innerHTML=state.playlists.length?state.playlists.map(p=>`<article class="playlist-card ${p.id===selectedPlaylist?'selected':''}"><strong>${escapeHtml(p.name)}</strong><small>${state.tracks.filter(t=>t.playlist===p.id).length} треков</small><div class="tool-controls">${button('playlist-open',p.id,'Открыть','text-btn')}${button('track-add',p.id,'＋ Трек','text-btn')}${button('playlist-edit',p.id,'✎','row-btn')}${button('playlist-delete',p.id,'×','row-btn')}</div></article>`).join(''):empty('Создай плейлист или импортируй его из файла.');
+  $('#playlistGrid').innerHTML=state.playlists.length?state.playlists.map(p=>`<article class="playlist-card ${p.id===selectedPlaylist?'selected':''}"><strong>${escapeHtml(p.name)}</strong><small>${state.tracks.filter(t=>t.playlist===p.id).length} треков</small><div class="tool-controls">${button('playlist-open',p.id,'Открыть','text-btn')}${button('track-add',p.id,'+ Трек','text-btn')}${button('playlist-edit',p.id,'✎','row-btn')}${button('playlist-delete',p.id,'×','row-btn')}</div></article>`).join(''):'';
   let list=selectedPlaylist==='favorites'?state.tracks.filter(t=>t.favorite):state.tracks.filter(t=>!selectedPlaylist||t.playlist===selectedPlaylist);
-  if(musicSort!=='new')list=list.filter(t=>t.hit===musicSort);
+  // Внутри открытого плейлиста показываем весь список, а фильтр категорий работает только в общей фонотеке.
+  if(musicSort!=='new'&&!selectedPlaylist)list=list.filter(t=>t.hit===musicSort);
   list=[...list].sort((a,b)=>b.created-a.created);
   const playlist=state.playlists.find(p=>p.id===selectedPlaylist);
   $('#trackCount').textContent=`${list.length} треков`;
-  $('#trackList').innerHTML=(selectedPlaylist?`<div class="manage-row"><strong>${escapeHtml(selectedPlaylist==='favorites'?'Любимые треки':playlist?.name||'')}</strong>${button('playlist-all','','Все плейлисты','text-btn')}</div>`:'')+(list.length?list.map(t=>`<div class="track-row">${coverMarkup(t)}<div class="task-copy"><strong>${escapeHtml(t.title)}</strong><small>${escapeHtml(t.artist||'Исполнитель не указан')}</small></div><button class="heart-btn ${t.favorite?'liked':''}" data-action="track-favorite" data-id="${t.id}" aria-label="${t.favorite?'Убрать из любимых':'Добавить в любимые'}">${t.favorite?'♥':'♡'}</button><select class="hit-select" data-track="${t.id}" aria-label="Категория ${escapeHtml(t.title)}">${Object.entries(hits).map(([key,label])=>`<option value="${key}" ${key===t.hit?'selected':''}>${label}</option>`).join('')}</select>${button('track-play',t.id,currentTrack===t.id&&!audio.paused?'Ⅱ':'▶','row-btn')}${button('track-edit',t.id,'✎','row-btn')}${button('track-delete',t.id,'×','row-btn')}</div>`).join(''):empty(selectedPlaylist==='favorites'?'Ты пока не отметил ни одного трека сердечком.':'Треков в этой подборке пока нет. Добавь аудиофайл в свой плейлист.'));
+  $('#trackList').innerHTML=(selectedPlaylist?`<div class="manage-row"><strong>${escapeHtml(selectedPlaylist==='favorites'?'Любимые треки':playlist?.name||'')}</strong>${button('playlist-all','','Все плейлисты','text-btn')}</div>`:'')+(list.length?list.map(t=>`<div class="track-row">${coverMarkup(t)}<div class="track-info"><div class="task-copy"><strong>${escapeHtml(t.title)}</strong><small>${escapeHtml(t.artist||'Исполнитель не указан')}${t.service?` · ${escapeHtml(t.service)}`:''}</small></div><div class="track-controls"><button class="heart-btn ${t.favorite?'liked':''}" data-action="track-favorite" data-id="${t.id}" aria-label="${t.favorite?'Убрать из любимых':'Добавить в любимые'}">${t.favorite?'♥':'♡'}</button><select class="hit-select" data-track="${t.id}" aria-label="Категория ${escapeHtml(t.title)}">${Object.entries(hits).map(([key,label])=>`<option value="${key}" ${key===t.hit?'selected':''}>${label}</option>`).join('')}</select>${button('track-play',t.id,currentTrack===t.id&&(embedPlaying||!audio.paused)?'Ⅱ':'▶','row-btn')}${t.sourceUrl?`<a class="row-btn track-source" href="${escapeHtml(t.sourceUrl)}" target="_blank" rel="noopener noreferrer" title="Открыть источник">↗</a>`:''}${button('track-edit',t.id,'✎','row-btn')}${button('track-delete',t.id,'×','row-btn')}</div></div></div>`).join(''):(selectedPlaylist==='favorites'?empty('Ты пока не отметил ни одного трека сердечком.'):''));
 }
 function playlistEditor(id) {
   const playlist=state.playlists.find(p=>p.id===id);
-  openEditor(playlist?'Название плейлиста':'Новый плейлист',field('Название',input('name',playlist?.name||'','text','required maxlength="100"')),data=>{const name=String(data.get('name')).trim();if(!name)throw new Error('Введите название.');if(playlist)playlist.name=name;else{const id=uid();state.playlists.push({id,name});selectedPlaylist=id;}saveAndRender();});
+  openEditor(playlist?'Название плейлиста':'Новый плейлист',field('Название',input('name',playlist?.name||'','text','required maxlength="100"')),data=>{const name=String(data.get('name')).trim();if(!name)throw new Error('Введите название.');if(playlist){playlist.name=name;logAction('переименовал плейлист',`«${name}»`,playlist.id);}else{const id=uid();state.playlists.push({id,name});selectedPlaylist=id;logAction('создал плейлист',`«${name}»`,id);}saveAndRender();});
 }
 $('#createPlaylist').onclick=()=>playlistEditor(null);
-$('#importVk').onclick=()=>openEditor('Импорт плейлиста','<p class="help-text">Выбери JSON-файл, экспортированный из VK или другого музыкального сервиса. Ссылки VK в интерфейсе не нужны.</p>'+field('Файл плейлиста',input('playlistFile','','file','accept=".json,application/json" required')),async data=>{
-  const file=data.get('playlistFile');if(!file?.size)throw new Error('Выбери JSON-файл.');let imported;try{imported=JSON.parse(await file.text());}catch{throw new Error('Файл должен быть корректным JSON.');}
-  const items=Array.isArray(imported)?imported:(Array.isArray(imported.tracks)?imported.tracks:Array.isArray(imported.audio)?imported.audio:[]);if(!items.length)throw new Error('В файле не найдено треков.');
-  const playlistId=uid();state.playlists.push({id:playlistId,name:imported.name||imported.title||'Импортированный плейлист'});
-  items.forEach(item=>state.tracks.push({id:uid(),title:item.title||item.name||'Без названия',artist:item.artist||item.author||'',playlist:playlistId,hit:'',cover:item.cover||item.image||'',created:Date.now()}));selectedPlaylist=playlistId;saveAndRender();toast(`Импортировано треков: ${items.length}`);
-},'Импортировать');
+$('#addTrack').onclick=()=>addTrackDialog('');
+function trackMetaFromFileName(name){
+  const base=String(name||'').replace(/\.[a-z0-9]{2,5}$/i,'').trim();
+  const parts=base.split(/\s+[–—-]\s+/);
+  if(parts.length>1){
+    const artist=parts.pop().trim();
+    const title=parts.join(' - ').trim();
+    return {title:title||base,artist};
+  }
+  return {title:base,artist:''};
+}
+function addTrackDialog(playlistId){
+  if(!state.playlists.length){
+    state.playlists.push({id:uid(),name:'Моя музыка'});
+    persist();
+    renderMusic();
+  }
+  const playlists=state.playlists;
+  const target=playlistId||(selectedPlaylist&&selectedPlaylist!=='favorites'?selectedPlaylist:'')||playlists[0].id;
+  openEditor('Добавить трек',
+    field('Аудиофайлы',`<input name="audio" type="file" accept="audio/*,.mp3,.m4a,.ogg,.wav,.flac,.aac,.opus" multiple required>`)+
+    field('Плейлист',`<select name="playlist">${playlists.map(p=>`<option value="${p.id}" ${p.id===target?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select>`)+
+    field('Категория',`<select name="hit">${Object.entries(hits).map(([key,label])=>`<option value="${key}">${label}</option>`).join('')}</select>`)+
+    '<p class="help-text">Можно выбрать несколько файлов. Название и исполнитель берутся из имени файла в формате «Название - артист».</p>',
+    async data=>{
+      const files=[...data.getAll('audio')].filter(file=>file instanceof File&&file.size);
+      if(!files.length)throw new Error('Выберите хотя бы один аудиофайл.');
+      if(files.length>50)throw new Error('За один раз можно добавить не больше 50 файлов.');
+      for(const file of files){
+        if(file.size>150*1024*1024)throw new Error(`Файл «${file.name}» больше 150 МБ.`);
+        if(!file.type.startsWith('audio/')&&!/\.(mp3|m4a|ogg|wav|flac|aac|opus)$/i.test(file.name))throw new Error(`Файл «${file.name}» не является аудиофайлом.`);
+      }
+      const playlist=String(data.get('playlist')),hit=String(data.get('hit')),addedTracks=[];
+      for(const file of files){
+        const id=uid(),meta=trackMetaFromFileName(file.name),cover=await embeddedCover(file).catch(()=>'');
+        await audioStore('put',id,file);
+        addedTracks.push({id,title:meta.title,artist:meta.artist,playlist,hit,favorite:false,created:Date.now()+addedTracks.length,cover});
+      }
+      state.tracks.push(...addedTracks);
+      selectedPlaylist=playlist;
+      const playlistName=playlists.find(item=>item.id===playlist)?.name||'';
+      logAction('добавил треки',`${addedTracks.length} шт. · ${playlistName}`,addedTracks[0]?.id||'');
+      saveAndRender();
+      toast(addedTracks.length===1?'Трек добавлен':`Добавлено треков: ${addedTracks.length}`);
+    },'Добавить');
+}
 async function editTrack(id,playlistId) {
   const track=state.tracks.find(t=>t.id===id),playlists=state.playlists;
   if(!playlists.length){playlistEditor(null);return;}
-  openEditor(track?'Изменить трек':'Добавить трек',
+  openEditor('Изменить трек',
     field('Название',input('title',track?.title||'','text','required maxlength="160"'))+field('Исполнитель',input('artist',track?.artist||'','text','maxlength="120"'))+
     field('Плейлист',`<select name="playlist">${playlists.map(p=>`<option value="${p.id}" ${p.id===(track?.playlist||playlistId)?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select>`)+
-    field('Аудиофайл (MP3, M4A, OGG, WAV)',input('audio','','file',`accept="audio/*" ${track?'':'required'}`))+
-    field('Родная обложка',input('cover','','file','accept="image/*"'))+'<p class="help-text">Для MP3 прочитаем обложку из ID3, если она встроена. Для других файлов можно загрузить оригинальную обложку вручную. Без неё покажем нейтральный значок.</p>'+field('Категория',`<select name="hit">${Object.entries(hits).map(([key,label])=>`<option value="${key}" ${key===(track?.hit||'')?'selected':''}>${label}</option>`).join('')}</select>`),async data=>{
-      const title=String(data.get('title')).trim(),file=data.get('audio'),id=track?.id||uid();if(!title)throw new Error('Введите название.');if(!track&&!file.size)throw new Error('Выберите аудиофайл.');
-      if(file.size>150*1024*1024)throw new Error('Максимальный размер аудиофайла — 150 МБ.');
-      let cover=await imageData(data.get('cover'));
-      if(file.size){if(!file.type.startsWith('audio/')&&!/\.(mp3|m4a|ogg|wav|flac)$/i.test(file.name))throw new Error('Выберите аудиофайл.');cover=cover||await embeddedCover(file);await audioStore('put',id,file);}
-      const record={id,title,artist:String(data.get('artist')).trim(),playlist:String(data.get('playlist')),hit:String(data.get('hit')),cover:cover||track?.cover||'',created:track?.created||Date.now(),favorite:!!track?.favorite};
+    field('Заменить аудиофайл (необязательно)',input('audio','','file','accept="audio/*"'))+
+    (track?.sourceUrl?`<p class="help-text">Источник: <a class="source-link" href="${escapeHtml(track.sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(track.service||track.sourceUrl)}</a></p>`:'<p class="help-text">Для MP3 обложка читается из ID3 автоматически.</p>')+
+    field('Категория',`<select name="hit">${Object.entries(hits).map(([key,label])=>`<option value="${key}" ${key===(track?.hit||'')?'selected':''}>${label}</option>`).join('')}</select>`),async data=>{
+      const title=String(data.get('title')).trim(),file=data.get('audio'),id=track?.id||uid();if(!title)throw new Error('Введите название.');
+      if(file?.size>150*1024*1024)throw new Error('Максимальный размер аудиофайла — 150 МБ.');
+      let cover=track?.cover||'';
+      if(file?.size){if(!file.type.startsWith('audio/')&&!/\.(mp3|m4a|ogg|wav|flac)$/i.test(file.name))throw new Error('Выберите аудиофайл.');cover=await embeddedCover(file)||cover;await audioStore('put',id,file);}
+      const record={...track,id,title,artist:String(data.get('artist')).trim(),playlist:String(data.get('playlist')),hit:String(data.get('hit')),cover,created:track?.created||Date.now(),favorite:!!track?.favorite,audioUrl:file?.size?'':track?.audioUrl};
       if(track)state.tracks[state.tracks.indexOf(track)]=record;else state.tracks.push(record);
+      logAction(track?'изменил трек':'добавил трек',`«${title}»${record.artist?` · ${record.artist}`:''}`,id);
       saveAndRender();toast('Трек сохранён');
     });
 }
-async function playTrack(id) {
-  if(currentTrack===id&&audio.src){if(audio.paused){try{await audio.play();}catch{toast('Не удалось воспроизвести файл.',true);}}else audio.pause();return;}
-  const track=state.tracks.find(t=>t.id===id);if(!track)return;
-  const generation=++playGeneration;
-  try{const blob=await audioStore('get',id);if(generation!==playGeneration)return;if(!blob)throw new Error('Аудиофайл не найден. Добавьте его повторно через редактирование.');audio.pause();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=URL.createObjectURL(blob);audio.src=objectURL;currentTrack=id;
-    $('#nowPlayingTitle').textContent=track.title;$('#nowPlayingArtist').textContent=track.artist||'Исполнитель не указан';$('.album-art').innerHTML=coverMarkup(track,'playing-cover');$('#musicHero').classList.remove('empty-player');await audio.play();
-  }catch(error){toast(error.message||'Не удалось воспроизвести трек.',true);}
+function playEmbed(track){
+  audio.pause();if(objectURL){URL.revokeObjectURL(objectURL);objectURL='';}
+  currentTrack=track.id;embedPlaying=true;
+  $('#nowPlayingTitle').textContent=track.title;$('#nowPlayingArtist').textContent=`${track.artist||'Исполнитель не указан'}${track.service?` · ${track.service}`:''}`;
+  $('.album-art').innerHTML=`<iframe class="music-embed" src="${escapeHtml(track.embedUrl)}" title="${escapeHtml(track.title)}" allow="autoplay; encrypted-media; fullscreen; clipboard-write" loading="lazy"></iframe>`;
+  $('#musicHero').classList.remove('empty-player');$('#musicHero').classList.add('embed-playing');
+  $('#musicCurrent').textContent='—';$('#musicDuration').textContent='—';$('#musicProgress').style.width='0%';$('#playBtn').textContent='Ⅱ';
+  const bar=$('#musicProgressBar');if(bar){bar.classList.add('disabled');bar.setAttribute('aria-valuemax','0');bar.setAttribute('aria-valuenow','0');bar.setAttribute('aria-valuetext','Встроенный плеер');}
+  startAura(track,{synthetic:true});renderMusic();
+  toast('Трек открыт во встроенном плеере сервиса.');
 }
-function nextTrack(direction) {const list=(selectedPlaylist==='favorites'?state.tracks.filter(t=>t.favorite):state.tracks.filter(t=>!selectedPlaylist||t.playlist===selectedPlaylist)).filter(t=>musicSort==='new'||t.hit===musicSort);if(!list.length){toast(selectedPlaylist==='favorites'?'В любимых пока нет треков.':'Добавь треки в плейлист.');return;}const index=list.findIndex(t=>t.id===currentTrack);playTrack(list[(index+direction+list.length)%list.length].id);}
+async function playTrack(id) {
+  if(currentTrack===id&&(embedPlaying||audio.src)){
+    if(embedPlaying){stopCurrentTrack();return;}
+    if(audio.paused){try{await audio.play();startAura(state.tracks.find(t=>t.id===id));}catch{toast('Не удалось воспроизвести файл.',true);}}
+    else audio.pause();
+    return;
+  }
+  const track=state.tracks.find(t=>t.id===id);if(!track)return;
+  if(track.embedUrl&&!track.audioUrl){playEmbed(track);return;}
+  const generation=++playGeneration;
+  try{
+    let src=track.audioUrl||'',fromBlob=false;
+    if(!src){
+      const blob=await audioStore('get',id);if(generation!==playGeneration)return;
+      if(!blob){if(track.sourceUrl){toast('Прямой аудиопоток недоступен. Открой источник по ссылке ↗',true);return;}throw new Error('Аудиофайл не найден. Добавь его повторно.');}
+      src=URL.createObjectURL(blob);fromBlob=true;
+    }
+    audio.pause();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=fromBlob?src:'';audio.src=src;currentTrack=id;embedPlaying=false;$('#musicProgressBar')?.classList.remove('disabled');
+    $('#nowPlayingTitle').textContent=track.title;$('#nowPlayingArtist').textContent=track.artist||'Исполнитель не указан';$('.album-art').innerHTML=coverMarkup(track,'playing-cover');$('#musicHero').classList.remove('empty-player','embed-playing');await audio.play();startAura(track);
+  }catch(error){stopAura();toast(error.message||'Не удалось воспроизвести трек.',true);}
+}
+function nextTrack(direction) {let list=selectedPlaylist==='favorites'?state.tracks.filter(t=>t.favorite):state.tracks.filter(t=>!selectedPlaylist||t.playlist===selectedPlaylist);if(musicSort!=='new'&&!selectedPlaylist)list=list.filter(t=>t.hit===musicSort);if(!list.length){toast(selectedPlaylist==='favorites'?'В любимых пока нет треков.':'Добавь треки в плейлист.');return;}const index=list.findIndex(t=>t.id===currentTrack);playTrack(list[(index+direction+list.length)%list.length].id);}
 $('#playBtn').onclick=()=>currentTrack?playTrack(currentTrack):nextTrack(1);$('#prevTrack').onclick=()=>nextTrack(-1);$('#nextTrack').onclick=()=>nextTrack(1);
-audio.onplay=()=>{$('#playBtn').textContent='Ⅱ';renderMusic();};audio.onpause=()=>{$('#playBtn').textContent='▶';renderMusic();};audio.onended=()=>nextTrack(1);audio.onerror=()=>toast('Формат аудио не поддерживается или файл повреждён.',true);
-audio.ontimeupdate=()=>{$('#musicCurrent').textContent=timerText(Math.floor(audio.currentTime));$('#musicDuration').textContent=Number.isFinite(audio.duration)?timerText(Math.floor(audio.duration)):'0:00';$('#musicProgress').style.width=(audio.duration?audio.currentTime/audio.duration*100:0)+'%';};
-$('.music-progress').onclick=e=>{if(Number.isFinite(audio.duration)){const box=e.currentTarget.getBoundingClientRect();audio.currentTime=Math.max(0,Math.min(1,(e.clientX-box.left)/box.width))*audio.duration;}};
-$('.music-progress').title='Нажми, чтобы перейти к нужному моменту';
+audio.onplay=()=>{$('#playBtn').textContent='Ⅱ';renderMusic();};audio.onpause=()=>{$('#playBtn').textContent='▶';if(!embedPlaying)stopAura();renderMusic();};audio.onended=()=>{stopAura();nextTrack(1);};audio.onerror=()=>{stopAura();toast('Формат аудио не поддерживается или файл повреждён.',true);};
+function musicProgressUpdate(){
+  const duration=Number.isFinite(audio.duration)?audio.duration:0;
+  const current=Math.min(audio.currentTime||0,duration||0);
+  const percent=duration?current/duration*100:0;
+  $('#musicCurrent').textContent=timerText(Math.floor(current));
+  $('#musicDuration').textContent=duration?timerText(Math.floor(duration)):'0:00';
+  $('#musicProgress').style.width=percent+'%';
+  const bar=$('#musicProgressBar');
+  if(bar){
+    bar.setAttribute('aria-valuemax',String(Math.round(duration)));
+    bar.setAttribute('aria-valuenow',String(Math.round(current)));
+    bar.setAttribute('aria-valuetext',`${timerText(Math.floor(current))} из ${timerText(Math.floor(duration))}`);
+    bar.title=duration?'Нажми или перетащи, чтобы перемотать':'Перемотка появится после загрузки трека';
+  }
+}
+audio.ontimeupdate=musicProgressUpdate;
+audio.onloadedmetadata=musicProgressUpdate;
+const musicProgressBar=$('#musicProgressBar');
+let musicSeeking=false;
+function seekMusicAt(event){
+  if(embedPlaying||!audio.src)return false;
+  const duration=audio.duration;
+  if(!Number.isFinite(duration)||duration<=0)return false;
+  const box=musicProgressBar.getBoundingClientRect();
+  const ratio=Math.max(0,Math.min(1,(event.clientX-box.left)/box.width));
+  audio.currentTime=ratio*duration;
+  musicProgressUpdate();
+  return true;
+}
+if(musicProgressBar){
+  musicProgressBar.addEventListener('pointerdown',e=>{
+    if(embedPlaying){toast('Во встроенном плеере перемотка управляется сервисом.');return;}
+    if(!seekMusicAt(e))return;
+    musicSeeking=true;musicProgressBar.classList.add('seeking');
+    try{musicProgressBar.setPointerCapture(e.pointerId);}catch{}
+    e.preventDefault();
+  });
+  musicProgressBar.addEventListener('pointermove',e=>{if(musicSeeking)seekMusicAt(e);});
+  const endSeek=e=>{if(!musicSeeking)return;musicSeeking=false;musicProgressBar.classList.remove('seeking');try{musicProgressBar.releasePointerCapture(e.pointerId);}catch{}};
+  musicProgressBar.addEventListener('pointerup',endSeek);
+  musicProgressBar.addEventListener('pointercancel',endSeek);
+  musicProgressBar.addEventListener('keydown',e=>{
+    if(embedPlaying)return;
+    const duration=audio.duration;
+    if(!audio.src||!Number.isFinite(duration)||duration<=0)return;
+    if(e.key==='Home'){audio.currentTime=0;musicProgressUpdate();e.preventDefault();return;}
+    if(e.key==='End'){audio.currentTime=Math.max(0,duration-.25);musicProgressUpdate();e.preventDefault();return;}
+    const step=e.key==='ArrowRight'?5:e.key==='ArrowLeft'?-5:0;
+    if(!step)return;
+    audio.currentTime=Math.max(0,Math.min(duration,audio.currentTime+step));
+    musicProgressUpdate();e.preventDefault();
+  });
+  musicProgressBar.title='Нажми или перетащи, чтобы перемотать';
+}
+musicProgressUpdate();
 $('#musicSort').onclick=()=>{const modes=['new','day','week','month','year'];musicSort=modes[(modes.indexOf(musicSort)+1)%modes.length];$('#musicSort').textContent=musicSort==='new'?'Все · сначала новые':hits[musicSort];renderMusic();};
 document.addEventListener('change',e=>{if(e.target.matches('.hit-select')){const track=state.tracks.find(t=>t.id===e.target.dataset.track);if(track){track.hit=e.target.value;persist();renderMusic();}}});
 
 // Settings only expose actions that have a real local implementation.
-$('.preferences').innerHTML=`<div class="preference-row" id="accountPreference"></div><div class="preference-row"><div><strong>Утренний план</strong><span>Показывать напоминание при открытии после 08:00</span></div><button class="toggle" data-setting="morning" aria-label="Утренний план"><i></i></button></div><div class="preference-row"><div><strong>Звук выполнения</strong><span>Короткий сигнал при завершении задачи</span></div><button class="toggle" data-setting="sound" aria-label="Звук выполнения"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать колокольчик напоминаний</span></div><button class="toggle" data-setting="focus" aria-label="Фокус-режим"><i></i></button></div><div class="preference-row"><div><strong>Хранение данных</strong><span>Автоматически в этом браузере. Аудио и видео — в IndexedDB.</span></div>${button('export','','Экспорт данных')}</div>`;
+$('.preferences').innerHTML=`<div class="preference-row" id="accountPreference"></div><div class="preference-row"><div><strong>Утренний план</strong><span>Показывать напоминание при открытии после 08:00</span></div><button class="toggle" data-setting="morning" aria-label="Утренний план"><i></i></button></div><div class="preference-row"><div><strong>Звук выполнения</strong><span>Короткий сигнал при завершении задачи</span></div><button class="toggle" data-setting="sound" aria-label="Звук выполнения"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать колокольчик напоминаний</span></div><button class="toggle" data-setting="focus" aria-label="Фокус-режим"><i></i></button></div><div class="preference-row"><div><strong>Хранение данных</strong><span>${CLOUD_ENABLED?'Синхронизируется с облаком Supabase. Аудио и видео — в этом браузере.':'Автоматически в этом браузере. Аудио и видео — в IndexedDB.'}</span></div>${button('export','','Экспорт данных')}</div>`;
 function renderSettings(){
   $$('[data-setting]').forEach(el=>{el.classList.toggle('on',state.settings[el.dataset.setting]);el.setAttribute('aria-pressed',String(state.settings[el.dataset.setting]));});
   $('#notificationsBtn').hidden=state.settings.focus;
   const account=$('#accountPreference');
   if(account)account.innerHTML=currentAccount?`<div><strong>Аккаунт</strong><span>${escapeHtml(currentAccount.email)} · @${escapeHtml(currentAccount.alias)}</span></div><button class="secondary-btn" data-action="logout">Выйти</button>`:'';
 }
-$('.preferences').insertAdjacentHTML('afterbegin',`<div class="preference-row weather-setting"><div><strong>Город для времени и погоды</strong><span id="settingsWeatherCity">${escapeHtml(state.weather.city)}</span></div><div class="preference-actions"><button class="secondary-btn" id="refreshWeather">Обновить погоду</button><button class="secondary-btn" id="chooseCitySettings">Изменить город</button></div></div>`);
-$('#chooseCitySettings').onclick=chooseWeatherCity;
-$('#refreshWeather').onclick=()=>{weatherUpdated=0;weatherFailedAt=0;weatherAttempts=0;updateWeather(true);toast('Обновляю погоду…');};
-function updateSettingsCity(){ $('#settingsWeatherCity').textContent=state.weather.city; }
-$$('[data-setting]').forEach(el=>el.onclick=()=>{state.settings[el.dataset.setting]=!state.settings[el.dataset.setting];persist();renderSettings();});
+function updateSettingsCity(){ const el=$('#settingsWeatherCity'); if(el)el.textContent=state.weather.city; }
+$$('[data-setting]').forEach(el=>el.onclick=()=>{state.settings[el.dataset.setting]=!state.settings[el.dataset.setting];logAction('изменил настройки',`${el.getAttribute('aria-label')}: ${state.settings[el.dataset.setting]?'вкл':'выкл'}`);persist();renderSettings();});
 function completionSound(){if(!state.settings.sound)return;try{const ctx=new (window.AudioContext||window.webkitAudioContext)(),osc=ctx.createOscillator(),gain=ctx.createGain();osc.connect(gain);gain.connect(ctx.destination);osc.frequency.value=660;gain.gain.setValueAtTime(.07,ctx.currentTime);gain.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+.2);osc.start();osc.stop(ctx.currentTime+.22);osc.onended=()=>ctx.close();}catch{}}
-function stopCurrentTrack(){playGeneration++;audio.pause();audio.removeAttribute('src');audio.load();currentTrack='';if(objectURL)URL.revokeObjectURL(objectURL);objectURL='';$('#nowPlayingTitle').textContent='Нет активного трека';$('#nowPlayingArtist').textContent='Выбери композицию из фонотеки';$('.album-art').innerHTML='<span>♪</span>';$('#musicCurrent').textContent='0:00';$('#musicDuration').textContent='0:00';$('#musicProgress').style.width='0%';$('#musicHero').classList.add('empty-player');}
+
+// --- Owner-only admin database -------------------------------------------
+let adminSearch='',adminUsers=[],adminEvents=[],adminLoadedAt=0,adminRefreshSeq=0;
+const formatAdminDate=value=>value?new Date(value).toLocaleDateString('ru-RU',{day:'numeric',month:'short',year:'numeric'}):'—';
+const formatAdminDateTime=value=>value?new Date(value).toLocaleString('ru-RU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'—';
+const adminInitials=account=>String(account?.name||account?.alias||account?.email||'?').split(/\s+/).filter(Boolean).slice(0,2).map(part=>part[0]).join('').toUpperCase()||'?';
+function updateAdminAccess(){
+  const owner=isOwner(currentAccount),nav=$('#adminNav');
+  if(nav)nav.hidden=!owner;
+  if(!owner&&activeView==='admin')showView('overview');
+  const count=$('#adminNavCount');
+  if(count&&owner)count.textContent=CLOUD_ENABLED?adminUsers.length:accounts.length;
+  if(owner&&CLOUD_ENABLED&&Date.now()-adminLoadedAt>5000)refreshAdminData();
+}
+async function refreshAdminData(){
+  if(!cloudSessionActive()||!isOwner(currentAccount))return;
+  const seq=++adminRefreshSeq;
+  adminLoadedAt=Date.now();
+  try{
+    const [users,events]=await Promise.all([
+      cloudRpc('sphere_admin_users',{p_id:currentAccount.id,p_token:currentAccount.token}),
+      cloudRpc('sphere_admin_events',{p_id:currentAccount.id,p_token:currentAccount.token,p_limit:200})
+    ]);
+    if(seq!==adminRefreshSeq)return;
+    adminUsers=Array.isArray(users)?users:[];
+    adminEvents=Array.isArray(events)?events:[];
+    const count=$('#adminNavCount');if(count)count.textContent=adminUsers.length;
+    if(activeView==='admin'&&isOwner(currentAccount))renderAdminCached();
+  }catch(error){
+    if(!error.cloudUnavailable&&Date.now()-cloudWarnedAt>15000){
+      cloudWarnedAt=Date.now();toast(error.message,true);
+    }
+  }
+}
+function renderAdminStats(){
+  const box=$('#adminStats');if(!box)return;
+  const source=CLOUD_ENABLED?adminUsers:accounts;
+  const warnings=CLOUD_ENABLED
+    ?adminUsers.reduce((sum,account)=>sum+(+account.warnings||0),0)
+    :Object.values(adminDb.users).reduce((sum,record)=>sum+(record.warnings?.length||0),0);
+  const midnight=new Date();midnight.setHours(0,0,0,0);
+  const active=source.filter(account=>{
+    const lastSeen=CLOUD_ENABLED?(+account.lastSeen||0):(adminDb.users[account.id]?.lastSeen||0);
+    return lastSeen>=midnight.getTime();
+  }).length;
+  const stats=[
+    ['◉','ПОЛЬЗОВАТЕЛИ',source.length,'Всего аккаунтов'],
+    ['⌁','АКТИВНЫ СЕГОДНЯ',active,'Заходили в Сферу'],
+    ['⚑','ПРЕДУПРЕЖДЕНИЯ',warnings,'Выдано пользователям'],
+    ['▤','СОБЫТИЯ',CLOUD_ENABLED?adminEvents.length:adminDb.events.length,'Записей в журнале']
+  ];
+  box.innerHTML=stats.map(([icon,label,value,note])=>`<article class="admin-stat"><span class="admin-stat-icon">${icon}</span><div><small>${label}</small><strong>${value}</strong><span>${note}</span></div></article>`).join('');
+}
+function renderAdminUsers(){
+  const box=$('#adminUserList');if(!box)return;
+  const source=CLOUD_ENABLED?adminUsers:accounts;
+  const query=adminSearch.trim().toLowerCase();
+  const list=[...source].filter(account=>{
+    if(!query)return true;
+    return [account.name,account.alias,account.email].filter(Boolean).some(value=>String(value).toLowerCase().includes(query));
+  }).sort((a,b)=>(isOwner(b)?1:0)-(isOwner(a)?1:0)||(b.created||0)-(a.created||0));
+  const meta=$('#adminUsersMeta');if(meta)meta.textContent=`${list.length} из ${source.length}`;
+  box.innerHTML=list.length?list.map(account=>{
+    const record=adminDb.users[account.id]||{warnings:[],lastSeen:0};
+    const warnCount=CLOUD_ENABLED?(+account.warnings||0):(record.warnings?.length||0);
+    const lastSeen=CLOUD_ENABLED?(+account.lastSeen||0):(record.lastSeen||0);
+    const owner=isOwner(account);
+    return `<div class="admin-user-row">
+      <div class="admin-user-id"><span class="avatar admin-avatar">${escapeHtml(adminInitials(account))}</span><div><strong>${escapeHtml(account.name||account.alias||'Без имени')}${owner?'<em class="admin-owner-badge">владелец</em>':''}</strong><span>@${escapeHtml(account.alias||'без_псевдонима')} · ${escapeHtml(account.email||'')}</span><small>${lastSeen?`Был(а): ${formatAdminDateTime(lastSeen)}`:'Ещё не входил(а)'}</small></div></div>
+      <span class="admin-date">${formatAdminDate(account.created)}</span>
+      <span class="admin-warn-pill ${warnCount?'has':''}">${warnCount?`⚑ ${warnCount}`:'—'}</span>
+      <div class="admin-user-actions">${button('admin-profile',account.id,'Профиль','text-btn')}${button('admin-warn',account.id,'Предупредить','text-btn')}${owner?'':button('admin-delete',account.id,'Удалить','text-btn admin-danger')}</div>
+    </div>`;
+  }).join(''):`<div class="admin-empty">${query?'Пользователи не найдены.':CLOUD_ENABLED?'В облачной базе пока нет пользователей.':'В базе пока нет пользователей.'}</div>`;
+}
+function renderAdminLog(){
+  const box=$('#adminLogList');if(!box)return;
+  const events=(CLOUD_ENABLED?adminEvents:adminDb.events).slice(0,120);
+  box.innerHTML=events.length?events.map(event=>{
+    const actor=event.actor||{};
+    return `<div class="admin-log-item"><span class="admin-log-dot">•</span><div class="admin-log-body"><div class="admin-log-top"><strong>${escapeHtml(actor.name||actor.alias||actor.email||'Гость')}</strong><small>${formatAdminDateTime(event.at)}</small></div><p><b>${escapeHtml(event.action||'событие')}</b>${event.details?`<span>${escapeHtml(event.details)}</span>`:''}</p>${actor.email?`<small class="admin-log-email">${escapeHtml(actor.email)}</small>`:''}</div></div>`;
+  }).join(''):'<div class="admin-empty">Журнал пока пуст. Действия пользователей появятся здесь.</div>';
+}
+function renderAdminCached(){
+  if(!isOwner(currentAccount))return;
+  if(!CLOUD_ENABLED)syncAdminDb();
+  renderAdminStats();renderAdminUsers();renderAdminLog();
+  const count=$('#adminNavCount');if(count)count.textContent=CLOUD_ENABLED?adminUsers.length:accounts.length;
+}
+function renderAdmin(){
+  if(!isOwner(currentAccount))return;
+  renderAdminCached();
+  if(CLOUD_ENABLED&&Date.now()-adminLoadedAt>5000)refreshAdminData();
+}
+function adminProfileMarkup(account,warnings,stats,lastSeen){
+  const owner=isOwner(account),id=account.id;
+  const warningMarkup=warnings.length?warnings.map(warning=>`<div class="admin-warning"><div><strong>${escapeHtml(warning.text)}</strong><small>${formatAdminDateTime(warning.created)}${warning.by?` · ${escapeHtml(warning.by)}`:''}${warning.read?' · прочитано':' · новое'}</small></div></div>`).join(''):'<p class="admin-empty compact">Предупреждений нет.</p>';
+  return `<div class="admin-profile-head"><span class="avatar admin-avatar">${escapeHtml(adminInitials(account))}</span><div><h3>${escapeHtml(account.name||account.alias||'Без имени')}</h3><p>@${escapeHtml(account.alias||'без_псевдонима')} · ${escapeHtml(account.email||'')}</p>${owner?'<span class="admin-owner-badge">владелец</span>':''}</div></div><div class="admin-profile-stats"><div><strong>${+stats.tasks||0}</strong><span>задач</span></div><div><strong>${+stats.completed||0}</strong><span>выполнено</span></div><div><strong>${+stats.goals||0}</strong><span>целей</span></div><div><strong>${+stats.tracks||0}</strong><span>треков</span></div></div><div class="admin-profile-meta"><span><b>Создан:</b> ${formatAdminDate(account.created)}</span><span><b>Последний вход:</b> ${lastSeen?formatAdminDateTime(lastSeen):'ещё не входил(а)'}</span><span><b>ID:</b> ${escapeHtml(account.id)}</span></div><div class="admin-warning-list"><div class="admin-subhead"><strong>Предупреждения</strong><span>${warnings.length}</span></div>${warningMarkup}</div><div class="admin-profile-actions">${button('admin-warn',id,'Выдать предупреждение','secondary-btn')}${owner?'':button('admin-delete',id,'Удалить профиль','secondary-btn admin-danger')}</div>`;
+}
+async function adminProfileDialog(id){
+  if(CLOUD_ENABLED){
+    let profile;
+    try{profile=await cloudRpc('sphere_admin_profile',{p_id:currentAccount.id,p_token:currentAccount.token,p_target:id});}
+    catch(error){toast(error.message,true);return;}
+    const account=profile?.account||{};if(!account.id)return;
+    const warnings=Array.isArray(profile.warnings)?profile.warnings:[];
+    const stats=profile.stats||{};
+    openEditor(`Профиль · ${account.name||account.alias}`,adminProfileMarkup(account,warnings,stats,account.lastSeen),null);
+    logAction('открыл профиль пользователя',`${account.name||account.alias} (${account.email})`,id);
+    return;
+  }
+  const account=accounts.find(item=>item.id===id);if(!account)return;
+  const record=adminUserRecord(id),userState=normalizeState(readStore(accountKey(account),null)||emptyState());
+  const warnings=[...record.warnings].reverse();
+  const stats={tasks:userState.tasks.length,completed:userState.tasks.filter(task=>task.progress===100).length,goals:userState.goals.length,tracks:userState.tracks.length};
+  openEditor(`Профиль · ${account.name||account.alias}`,adminProfileMarkup(account,warnings,stats,record.lastSeen),null);
+  logAction('открыл профиль пользователя',`${account.name||account.alias} (${account.email})`,id);
+}
+function adminWarnDialog(id){
+  const account=(CLOUD_ENABLED?adminUsers:accounts).find(item=>item.id===id);if(!account)return;
+  openEditor('Выдать предупреждение',`<p class="help-text">Пользователь <strong>${escapeHtml(account.name||account.alias)}</strong> · @${escapeHtml(account.alias||'')}<br>Предупреждение увидят при следующем входе.</p>${field('Текст предупреждения',`<textarea name="warning" rows="4" required maxlength="500" placeholder="Например: пожалуйста, соблюдай правила сообщества."></textarea>`)}`,async data=>{
+    const text=String(data.get('warning')||'').trim();if(!text)throw new Error('Введите текст предупреждения.');
+    if(CLOUD_ENABLED){
+      await cloudRpc('sphere_admin_warn',{p_id:currentAccount.id,p_token:currentAccount.token,p_target:id,p_warning_id:uid(),p_text:text});
+      logAction('выдал предупреждение',`«${text}» · ${account.name||account.alias}`,id);
+      await refreshAdminData();
+      toast(`Предупреждение выдано: ${account.name||account.alias}`);
+      return;
+    }
+    const record=adminUserRecord(id);
+    record.warnings.push({id:uid(),text,created:Date.now(),by:currentAccount?.name||currentAccount?.alias||'Администратор',byEmail:currentAccount?.email||'',read:false});
+    saveAdminDb();logAction('выдал предупреждение',`«${text}» · ${account.name||account.alias}`,id);
+    renderAdmin();toast(`Предупреждение выдано: ${account.name||account.alias}`);
+  },'Выдать');
+}
+function adminDeleteProfile(id){
+  const account=(CLOUD_ENABLED?adminUsers:accounts).find(item=>item.id===id);if(!account)return;
+  if(isOwner(account)){toast('Аккаунт владельца удалить нельзя.',true);return;}
+  openEditor('Удаление профиля',`<p>Удалить профиль <strong>${escapeHtml(account.name||account.alias)}</strong>?</p><p class="help-text">Будут удалены ${CLOUD_ENABLED?'данные из облака и':'задачи, цели, плейлисты, треки, фото и видео из'} этого браузера. Действие необратимо.</p>`,async ()=>{
+    if(CLOUD_ENABLED){
+      await cloudRpc('sphere_admin_delete',{p_id:currentAccount.id,p_token:currentAccount.token,p_target:id});
+    }
+    const localAccount=accounts.find(item=>item.id===id);
+    if(localAccount){
+      const userState=normalizeState(readStore(accountKey(localAccount),null)||emptyState());
+      const mediaKeys=[userState.profile.video,...userState.tracks.map(track=>track.id)].filter(Boolean);
+      accounts=accounts.filter(item=>item.id!==id);
+      localStorage.setItem(ACCOUNTS_KEY,JSON.stringify(accounts));
+      localStorage.removeItem(accountKey(localAccount));
+      if(sessionId===id)localStorage.removeItem(SESSION_KEY);
+      mediaKeys.forEach(key=>audioStore('delete',key).catch(()=>{}));
+    }
+    delete adminDb.users[id];saveAdminDb();
+    logAction('удалил профиль',`${account.name||account.alias} (${account.email})`,id);
+    if(CLOUD_ENABLED){
+      await refreshAdminData();
+      toast('Профиль удалён из облака');
+      return;
+    }
+    renderAdmin();toast('Профиль удалён');
+  },'Удалить профиль');
+}
+async function adminExportDb(){
+  let users,events;
+  if(CLOUD_ENABLED){
+    try{
+      [users,events]=await Promise.all([
+        cloudRpc('sphere_admin_users',{p_id:currentAccount.id,p_token:currentAccount.token}),
+        cloudRpc('sphere_admin_events',{p_id:currentAccount.id,p_token:currentAccount.token,p_limit:600})
+      ]);
+    }catch(error){toast(error.message,true);return;}
+    users=Array.isArray(users)?users:[];
+    events=Array.isArray(events)?events:[];
+  }else{
+    users=accounts.map(({salt,passHash,recoveryHash,token,...account})=>({...account,warnings:adminDb.users[account.id]?.warnings||[]}));
+    events=adminDb.events;
+  }
+  const payload={exportedAt:new Date().toISOString(),users,events};
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download=`sphere-admin-db-${today()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  logAction('экспортировал базу пользователей',`${users.length} пользователей`);
+  toast('База пользователей и журнал экспортированы.');
+}
+function adminClearLog(){
+  openEditor('Очистить журнал',`<p>Удалить все записи журнала действий?</p><p class="help-text">Это не удалит профили и предупреждения.</p>`,async ()=>{
+    if(CLOUD_ENABLED)await cloudRpc('sphere_admin_clear_events',{p_id:currentAccount.id,p_token:currentAccount.token});
+    adminDb.events=[];saveAdminDb();logAction('очистил журнал','Все записи удалены');
+    if(CLOUD_ENABLED){await refreshAdminData();toast('Журнал действий очищен');return;}
+    renderAdmin();toast('Журнал действий очищен');
+  },'Очистить');
+}
+$('#adminSearch')?.addEventListener('input',e=>{adminSearch=e.target.value;renderAdminUsers();});
+$('#adminExport')?.addEventListener('click',adminExportDb);
+$('#adminClearLog')?.addEventListener('click',adminClearLog);
+
+function stopCurrentTrack(){playGeneration++;embedPlaying=false;audio.pause();audio.removeAttribute('src');audio.load();currentTrack='';if(objectURL)URL.revokeObjectURL(objectURL);objectURL='';stopAura();$('#nowPlayingTitle').textContent='Нет активного трека';$('#nowPlayingArtist').textContent='';$('.album-art').innerHTML='<span>♪</span>';$('#playBtn').textContent='▶';$('#musicHero').classList.add('empty-player');$('#musicHero').classList.remove('embed-playing','aura-on');$('#musicProgressBar')?.classList.remove('disabled','seeking');musicProgressUpdate();renderMusic();}
 document.addEventListener('click',async e=>{
   const target=e.target.closest('[data-action]');if(!target)return;const {action,id}=target.dataset;
   try {
-    if(action==='task-cycle'){const task=state.tasks.find(t=>t.id===id);if(!task||task.date>today())return;task.progress=task.progress===100?0:task.progress+50;task.activityDate=task.progress?today():null;if(task.progress===100)completionSound();saveAndRender();}
+    if(action==='task-cycle'){const task=state.tasks.find(t=>t.id===id);if(!task||task.date>today())return;task.progress=task.progress===100?0:task.progress+50;task.activityDate=task.progress?today():null;if(task.progress===100)completionSound();logAction('изменил прогресс задачи',`«${task.title}» · ${statuses[task.progress]}`,task.id);saveAndRender();}
     if(action==='task-edit')editTask(id);
-    if(action==='task-delete'){const task=state.tasks.find(t=>t.id===id);confirmDelete(task.title,()=>{state.tasks=state.tasks.filter(t=>t.id!==id);});}
+    if(action==='task-delete'){const task=state.tasks.find(t=>t.id===id);if(task)confirmDelete(task.title,()=>{state.tasks=state.tasks.filter(t=>t.id!==id);logAction('удалил задачу',`«${task.title}»`,id);});}
     if(action==='calendar-select'){selectedDate=id;renderCalendar();}
     if(action==='goal-edit')editGoal(id);
-    if(action==='goal-delete'){const goal=state.goals.find(g=>g.id===id);confirmDelete(goal.title,()=>{state.goals=state.goals.filter(g=>g.id!==id);});}
-    if(action==='habit-toggle'){const habit=state.habits.find(h=>h.id===id);habit.days=habit.days.includes(today())?habit.days.filter(d=>d!==today()):[...habit.days,today()];saveAndRender();}
-    if(action==='habit-delete'){state.habits=state.habits.filter(h=>h.id!==id);saveAndRender();$('#habitMore').click();}
+    if(action==='goal-delete'){const goal=state.goals.find(g=>g.id===id);if(goal)confirmDelete(goal.title,()=>{state.goals=state.goals.filter(g=>g.id!==id);logAction('удалил цель',`«${goal.title}»`,id);});}
+    if(action==='habit-toggle'){const habit=state.habits.find(h=>h.id===id);if(habit){const done=habit.days.includes(today());habit.days=done?habit.days.filter(d=>d!==today()):[...habit.days,today()];logAction(done?'снял отметку привычки':'отметил привычку',habit.name,habit.id);saveAndRender();}}
+    if(action==='habit-delete'){const habit=state.habits.find(h=>h.id===id);if(habit)logAction('удалил привычку',habit.name,id);state.habits=state.habits.filter(h=>h.id!==id);saveAndRender();$('#habitMore').click();}
     if(action==='timer-toggle'){if(focusRunning){focusRemaining=Math.max(0,Math.ceil((focusEnd-Date.now())/1000));focusRunning=false;}else{if(focusRemaining<=0)focusRemaining=1500;focusEnd=Date.now()+focusRemaining*1000;focusRunning=true;}focusDialog();}
     if(action==='timer-reset'){focusRunning=false;focusRemaining=1500;focusDialog();}
     if(action==='playlist-open'){selectedPlaylist=id;renderMusic();}
     if(action==='playlist-all'){selectedPlaylist='';renderMusic();}
     if(action==='playlist-edit')playlistEditor(id);
-    if(action==='playlist-delete'){const p=state.playlists.find(p=>p.id===id);confirmDelete(p.name,()=>{const tracks=state.tracks.filter(t=>t.playlist===id);if(tracks.some(t=>t.id===currentTrack))stopCurrentTrack();tracks.forEach(t=>audioStore('delete',t.id).catch(()=>toast('Не удалось очистить файл из хранилища.',true)));state.tracks=state.tracks.filter(t=>t.playlist!==id);state.playlists=state.playlists.filter(p=>p.id!==id);if(selectedPlaylist===id)selectedPlaylist='';});}
-    if(action==='track-add')editTrack(null,id);
+    if(action==='playlist-delete'){const p=state.playlists.find(p=>p.id===id);if(p)confirmDelete(p.name,()=>{const tracks=state.tracks.filter(t=>t.playlist===id);if(tracks.some(t=>t.id===currentTrack))stopCurrentTrack();tracks.forEach(t=>audioStore('delete',t.id).catch(()=>toast('Не удалось очистить файл из хранилища.',true)));state.tracks=state.tracks.filter(t=>t.playlist!==id);state.playlists=state.playlists.filter(p=>p.id!==id);if(selectedPlaylist===id)selectedPlaylist='';logAction('удалил плейлист',`«${p.name}» · ${tracks.length} треков`,id);});}
+    if(action==='track-add')addTrackDialog(id);
     if(action==='track-edit')editTrack(id);
     if(action==='track-play')await playTrack(id);
-    if(action==='track-favorite'){const track=state.tracks.find(t=>t.id===id);if(track){track.favorite=!track.favorite;persist();renderMusic();renderProfile();toast(track.favorite?'Добавлено в любимые':'Убрано из любимых');}}
-    if(action==='track-delete'){const t=state.tracks.find(t=>t.id===id);confirmDelete(t.title,()=>{if(currentTrack===id)stopCurrentTrack();state.tracks=state.tracks.filter(t=>t.id!==id);audioStore('delete',id).catch(()=>toast('Не удалось очистить аудиофайл.',true));});}
-    if(action==='export'){const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`sphere-${today()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('Данные экспортированы. Аудио и видео в JSON не входят.');}
+    if(action==='track-favorite'){const track=state.tracks.find(t=>t.id===id);if(track){track.favorite=!track.favorite;logAction(track.favorite?'добавил трек в любимые':'убрал трек из любимых',`«${track.title}»`,id);persist();renderMusic();renderProfile();toast(track.favorite?'Добавлено в любимые':'Убрано из любимых');}}
+    if(action==='track-delete'){const t=state.tracks.find(t=>t.id===id);if(t)confirmDelete(t.title,()=>{if(currentTrack===id)stopCurrentTrack();state.tracks=state.tracks.filter(t=>t.id!==id);audioStore('delete',id).catch(()=>toast('Не удалось очистить аудиофайл.',true));logAction('удалил трек',`«${t.title}»`,id);});}
+    if(action==='export'){const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`sphere-${today()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);logAction('экспортировал данные','JSON-копия профиля');toast('Данные экспортированы. Аудио и видео в JSON не входят.');}
     if(action==='logout')logoutAccount();
+    if(action==='admin-profile')adminProfileDialog(id);
+    if(action==='admin-warn')adminWarnDialog(id);
+    if(action==='admin-delete')adminDeleteProfile(id);
   }catch(error){toast(error.message,true);}
 });
-function renderAll(){renderTasks();renderCalendar();renderGoals();renderProfile();renderHabits();renderMusic();renderNews();renderSettings();updateSettingsCity();}
+function renderAll(){renderTasks();renderCalendar();renderGoals();renderProfile();renderHabits();renderMusic();renderNews();renderSettings();updateSettingsCity();updateAdminAccess();if(activeView==='admin')renderAdmin();}
 function saveAndRender(){persist();renderAll();}
 
 const accountKey = account => ACCOUNT_PREFIX + account.id;
@@ -853,7 +1690,7 @@ function showAuth(tab = 'login') {
   $('#authTabs').hidden=isRecovery;
   $$('[data-auth-tab]').forEach(button=>button.classList.toggle('active',button.dataset.authTab===tab));
   $('#authTitle').textContent=isRecovery?'Восстановление доступа':tab==='register'?'Создай свой аккаунт':'Вход в Сферу';
-  $('#authSub').textContent=isRecovery?'Восстановление работает локально: по email и коду, который был выдан при регистрации.':'Данные сохраняются в этом браузере и привязаны к твоему аккаунту.';
+  $('#authSub').textContent=isRecovery?'Восстановление работает по email и коду, который был выдан при регистрации.':CLOUD_ENABLED?'Данные сохраняются в облаке и доступны с любого устройства.':'Данные сохраняются в этом браузере и привязаны к твоему аккаунту.';
   if(tab==='register'&&firstAccountSeed?.profile){
     const name=$('#registerForm [name="name"]'),alias=$('#registerForm [name="alias"]');
     if(name&&!name.value&&firstAccountSeed.profile.name)name.value=firstAccountSeed.profile.name;
@@ -869,15 +1706,48 @@ function applyStateAfterLogin() {
     state.lastMorning=today();persist();toast(`Твой план на сегодня: ${state.tasks.filter(t=>t.date===today()&&t.progress<100).length} незавершённых задач.`);
   }
 }
-function startSession(account) {
+async function startSession(account, options = {}) {
   currentAccount=account;STORAGE=accountKey(account);
   localStorage.setItem(SESSION_KEY,account.id);
-  state=normalizeState(readStore(STORAGE,null)||emptyState());
+  const useCloud=CLOUD_ENABLED&&!!account.token&&!options.localOnly;
+  let cloudState=null,cloudWarnings=[],cloudDown=false;
+  if(useCloud){
+    try{
+      cloudState=applyCloudState(await cloudRpc('sphere_state_get',{p_id:account.id,p_token:account.token}));
+    }catch(error){
+      if(String(error.code||'').toLowerCase()==='invalid_session'){
+        currentAccount=null;localStorage.removeItem(SESSION_KEY);
+        showAuth('login');toast('Сессия устарела. Войдите заново.',true);
+        return;
+      }
+      cloudDown=true;
+    }
+    try{
+      const list=await cloudRpc('sphere_warnings_take',{p_id:account.id,p_token:account.token});
+      if(Array.isArray(list))cloudWarnings=list;
+    }catch{}
+  }
+  state=cloudState||normalizeState(readStore(STORAGE,null)||emptyState());
+  if(cloudState){try{localStorage.setItem(STORAGE,JSON.stringify(state));}catch{}}
+  const warnings=useCloud?cloudWarnings:unreadWarnings(account.id);
+  if(!useCloud){
+    const record=adminUserRecord(account.id);record.lastSeen=Date.now();saveAdminDb();
+  }
   $('#authScreen').hidden=true;document.body.classList.remove('auth-locked');
   applyStateAfterLogin();
+  if(cloudDown&&!cloudOfflineNotified){
+    cloudOfflineNotified=true;
+    setTimeout(()=>toast('Нет связи с облаком. Показаны локально сохранённые данные.',true),900);
+  }
+  if(warnings.length){
+    if(!useCloud){warnings.forEach(warning=>warning.read=true);saveAdminDb();}
+    setTimeout(()=>toast(`Предупреждение администратора: ${warnings.map(warning=>warning.text).join(' · ')}`,true),900);
+  }
 }
-function logoutAccount() {
+async function logoutAccount() {
+  logAction('вышел из аккаунта',currentAccount?.email||'');
   persist();
+  await saveCloudNow();
   localStorage.removeItem(SESSION_KEY);
   location.reload();
 }
@@ -890,11 +1760,45 @@ $('#loginForm').onsubmit=async e=>{
   submit.disabled=true;
   try{
     const data=new FormData(form),login=String(data.get('login')||'').trim(),password=String(data.get('password')||'');
-    const account=accounts.find(item=>normalizeEmail(item.email)===normalizeEmail(login)||normalizeAlias(item.alias)===normalizeAlias(login));
+    if(CLOUD_ENABLED){
+      let account=null;
+      try{
+        const salt=await cloudRpc('sphere_salt',{p_identifier:login});
+        if(!salt){
+          const local=findLocalAccount(login);
+          if(local){
+            const localHash=await hashSecret(password,local.salt);
+            if(localHash!==local.passHash)throw new Error('Неверный пароль.');
+            account=await migrateLocalAccount(local);
+          }
+          if(!account)throw new Error('Аккаунт не найден. Проверь email или псевдоним.');
+        }else{
+          const hash=await hashSecret(password,salt);
+          const result=await cloudRpc('sphere_login',{p_identifier:login,p_hash:hash});
+          account={id:result.id,name:result.name,alias:result.alias,email:result.email,salt,passHash:hash,created:+result.created||Date.now(),token:result.token};
+          cacheCloudAccount(account);
+        }
+      }catch(error){
+        if(error.cloudUnavailable){
+          const local=findLocalAccount(login);
+          if(local&&await hashSecret(password,local.salt)===local.passHash){
+            await startSession(local,{localOnly:true});
+            logAction('вошёл в аккаунт (локальная копия)',local.email,local.id);
+            toast('Облако недоступно. Вход выполнен по локальной копии.',true);
+            return;
+          }
+        }
+        throw error;
+      }
+      await startSession(account);
+      logAction('вошёл в аккаунт',account.email,account.id);
+      return;
+    }
+    const account=findLocalAccount(login);
     if(!account)throw new Error('Аккаунт не найден. Проверь email или псевдоним.');
     const hash=await hashSecret(password,account.salt);
     if(hash!==account.passHash)throw new Error('Неверный пароль.');
-    startSession(account);
+    await startSession(account);logAction('вошёл в аккаунт',account.email,account.id);
   }catch(error){authMessage(error.message||'Не удалось войти.');}
   finally{submit.disabled=false;}
 };
@@ -908,15 +1812,31 @@ $('#registerForm').onsubmit=async e=>{
     if(/\s/.test(alias))throw new Error('Псевдоним не должен содержать пробелы.');
     if(password.length<6)throw new Error('Пароль должен быть не короче 6 символов.');
     if(password!==password2)throw new Error('Пароли не совпадают.');
-    if(accounts.some(item=>normalizeEmail(item.email)===email))throw new Error('Аккаунт с таким email уже существует.');
-    if(accounts.some(item=>normalizeAlias(item.alias)===normalizeAlias(alias)))throw new Error('Такой псевдоним уже занят.');
-    const salt=randomHex(),recoveryCode=randomRecoveryCode();
-    const account={id:uid(),email,alias,name:name||alias,salt,passHash:await hashSecret(password,salt),recoveryHash:await hashSecret(normalizeRecovery(recoveryCode),salt),created:Date.now()};
+    const salt=randomHex(),recoveryCode=randomRecoveryCode(),passHash=await hashSecret(password,salt),recoveryHash=await hashSecret(normalizeRecovery(recoveryCode),salt);
     const seed=firstAccountSeed?JSON.parse(JSON.stringify(firstAccountSeed)):emptyState();
     seed.profile.name=name||seed.profile.name||alias;seed.profile.alias=alias;
-    localStorage.setItem(accountKey(account),JSON.stringify(normalizeState(seed)));
+    const seedState=normalizeState(seed);
+    if(CLOUD_ENABLED){
+      const id=uid(),token=randomHex(32);
+      const result=await cloudRpc('sphere_register',{
+        p_id:id,p_name:name||alias,p_alias:alias,p_email:email,p_salt:salt,p_hash:passHash,
+        p_recovery_hash:recoveryHash,p_token:token,p_state:seedState
+      });
+      const account={id:result.id||id,name:result.name||name||alias,alias:result.alias||normalizeAlias(alias),email:result.email||email,
+        salt,passHash,recoveryHash,created:+result.created||Date.now(),token:result.token||token};
+      localStorage.setItem(accountKey(account),JSON.stringify(seedState));
+      cacheCloudAccount(account);
+      await startSession(account);
+      logAction('зарегистрировался',`${account.name} · @${account.alias}`,account.id);
+      showRecoveryCode(recoveryCode);
+      return;
+    }
+    if(accounts.some(item=>normalizeEmail(item.email)===email))throw new Error('Аккаунт с таким email уже существует.');
+    if(accounts.some(item=>normalizeAlias(item.alias)===normalizeAlias(alias)))throw new Error('Такой псевдоним уже занят.');
+    const account={id:uid(),email,alias,name:name||alias,salt,passHash,recoveryHash,created:Date.now()};
+    localStorage.setItem(accountKey(account),JSON.stringify(seedState));
     accounts.push(account);localStorage.setItem(ACCOUNTS_KEY,JSON.stringify(accounts));
-    startSession(account);showRecoveryCode(recoveryCode);
+    await startSession(account);logAction('зарегистрировался',`${account.name} · @${account.alias}`,account.id);showRecoveryCode(recoveryCode);
   }catch(error){authMessage(error.message||'Не удалось создать аккаунт.');}
   finally{submit.disabled=false;}
 };
@@ -927,6 +1847,20 @@ $('#recoveryForm').onsubmit=async e=>{
     const data=new FormData(form),email=normalizeEmail(data.get('email')),code=normalizeRecovery(data.get('code')),password=String(data.get('password')||''),password2=String(data.get('password2')||'');
     if(password.length<6)throw new Error('Пароль должен быть не короче 6 символов.');
     if(password!==password2)throw new Error('Пароли не совпадают.');
+    if(CLOUD_ENABLED){
+      const salt=await cloudRpc('sphere_salt',{p_identifier:email});
+      if(!salt)throw new Error('Аккаунт с таким email не найден.');
+      const recoveryHash=await hashSecret(code,salt),recoveryCode=randomRecoveryCode();
+      const passHash=await hashSecret(password,salt);
+      const newRecoveryHash=await hashSecret(normalizeRecovery(recoveryCode),salt);
+      const result=await cloudRpc('sphere_recover',{p_email:email,p_recovery_hash:recoveryHash,p_hash:passHash,p_new_recovery_hash:newRecoveryHash});
+      const account={id:result.id,name:result.name,alias:result.alias,email:result.email,salt,passHash,recoveryHash:newRecoveryHash,created:+result.created||Date.now(),token:result.token};
+      cacheCloudAccount(account);
+      await startSession(account);
+      logAction('восстановил доступ',account.email,account.id);
+      showRecoveryCode(recoveryCode,'Пароль изменён');
+      return;
+    }
     const account=accounts.find(item=>normalizeEmail(item.email)===email);
     if(!account)throw new Error('Аккаунт с таким email не найден.');
     const recoveryHash=await hashSecret(code,account.salt);
@@ -935,7 +1869,7 @@ $('#recoveryForm').onsubmit=async e=>{
     account.passHash=await hashSecret(password,account.salt);
     account.recoveryHash=await hashSecret(normalizeRecovery(recoveryCode),account.salt);
     localStorage.setItem(ACCOUNTS_KEY,JSON.stringify(accounts));
-    startSession(account);showRecoveryCode(recoveryCode,'Пароль изменён');
+    await startSession(account);logAction('восстановил доступ',account.email,account.id);showRecoveryCode(recoveryCode,'Пароль изменён');
   }catch(error){authMessage(error.message||'Не удалось восстановить доступ.');}
   finally{submit.disabled=false;}
 };
@@ -943,4 +1877,28 @@ $('#recoveryForm').onsubmit=async e=>{
 // Clear the old visual demo counts immediately; no fabricated activity is migrated.
 $('.focus-mini span').textContent='Прогресс задач';
 $('#musicProgress').style.width='0%';
-if(currentAccount)startSession(currentAccount);else showAuth(accounts.length?'login':'register');
+
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')saveCloudNow();});
+window.addEventListener('pagehide',()=>{saveCloudNow();});
+
+function hydrateCachedSession(){
+  if(!currentAccount)return;
+  try{
+    document.body.classList.remove('auth-locked');
+    $('#authScreen').hidden=true;
+    applyTheme();renderAll();updateClock();
+  }catch{}
+}
+async function boot(){
+  if(CLOUD_ENABLED&&currentAccount&&!currentAccount.token){
+    currentAccount=null;
+    localStorage.removeItem(SESSION_KEY);
+  }
+  if(currentAccount){
+    hydrateCachedSession();
+    await startSession(currentAccount);
+    return;
+  }
+  showAuth(CLOUD_ENABLED||accounts.length?'login':'register');
+}
+boot().catch(error=>{console.error(error);showAuth(CLOUD_ENABLED||accounts.length?'login':'register');});
