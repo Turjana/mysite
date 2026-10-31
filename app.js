@@ -23,7 +23,18 @@ const CLOUD_ENABLED = /^https:\/\/.+\.supabase\.co$/i.test(SUPABASE_URL) && SUPA
 const priorityLabels = {urgent:'Срочный',medium:'Средний',low:'Не срочный'};
 const priorityRank = {urgent:0,medium:1,low:2};
 const normalizePriority = value => ({blue:'low',orange:'medium',purple:'urgent'}[value] || (priorityLabels[value] ? value : 'medium'));
-const emptyState = () => ({version:3,tasks:[],goals:[],playlists:[],tracks:[],profile:{name:'',alias:'',photo:'',photoX:50,photoY:50,photoScale:1,layout:'card',video:'',videoDuration:0,ownerPrefix:'Владелец',status:'✦ В своём ритме'},habits:[{id:uid(),name:'Утренняя зарядка',days:[]},{id:uid(),name:'Читать 20 минут',days:[]}],note:'',theme:'dark',settings:{sound:false,focus:false,morning:false},weather:{city:'Москва',lat:55.7558,lon:37.6173,timezone:'Europe/Moscow',temp:null,code:null,desc:'',updated:0},newsSources:[],newsFeed:[],newsCustom:[],sessions:0});
+const THEME_PRESETS = {
+  blue:{label:'Лазурный',color:'#76a9ff'},
+  violet:{label:'Фиолетовый',color:'#a78bff'},
+  mint:{label:'Мятный',color:'#63e0c0'},
+  sunset:{label:'Закатный',color:'#ff936b'},
+  rose:{label:'Розовый',color:'#ff7fae'},
+  gold:{label:'Золотой',color:'#f0c96a'},
+  ice:{label:'Ледяной',color:'#72d6ff'},
+  lime:{label:'Лаймовый',color:'#b8e36a'}
+};
+const THEME_LABELS = {dark:'Тёмная',black:'Чёрная',light:'Светлая'};
+const emptyState = () => ({version:3,tasks:[],goals:[],playlists:[],tracks:[],profile:{name:'',alias:'',photo:'',photoX:50,photoY:50,photoScale:1,layout:'card',video:'',videoDuration:0,ownerPrefix:'Владелец',status:'✦ В своём ритме'},habits:[{id:uid(),name:'Утренняя зарядка',days:[]},{id:uid(),name:'Читать 20 минут',days:[]}],note:'',theme:'dark',accent:'blue',settings:{sound:false,focus:false,morning:false},weather:{city:'Москва',lat:55.7558,lon:37.6173,timezone:'Europe/Moscow',temp:null,code:null,desc:'',updated:0},newsSources:[],newsFeed:[],newsCustom:[],sessions:0});
 const readStore = (key, fallback = null) => { try { const value = JSON.parse(localStorage.getItem(key)); return value ?? fallback; } catch { return fallback; } };
 function normalizeState(raw) {
   const base = emptyState(), source = raw && typeof raw === 'object' ? raw : {};
@@ -39,6 +50,8 @@ function normalizeState(raw) {
   if (!['card','row'].includes(next.profile.layout)) next.profile.layout = 'card';
   next.weather = {...base.weather, ...(source.weather || {})};
   next.settings = {...base.settings, ...(source.settings || {})};
+  if (!['dark','black','light'].includes(next.theme)) next.theme = 'dark';
+  if (!THEME_PRESETS[next.accent]) next.accent = 'blue';
   next.newsSources = Array.isArray(source.newsSources) ? source.newsSources : [];
   next.newsFeed = Array.isArray(source.newsFeed) ? source.newsFeed : [];
   next.newsCustom = Array.isArray(source.newsCustom) ? source.newsCustom : [];
@@ -60,7 +73,13 @@ const firstAccountSeed = !currentAccount && accounts.length === 0 ? JSON.parse(J
 
 // Локальная админ-база: карточки пользователей, предупреждения и журнал действий.
 const ADMIN_DB_KEY = 'sphere-admin-db';
+const ADMIN_SEEN_KEY = 'sphere-admin-seen';
+const SUPPORT_THREAD_KEY = 'sphere-support-thread';
 const ADMIN_LOG_LIMIT = 600;
+let adminSeenAt = +localStorage.getItem(ADMIN_SEEN_KEY) || 0;
+let adminSupportThreads = [], adminSupportCurrent = null, adminSupportAvailable = true;
+let supportThreadState = readSupportThread(), supportMessages = [], supportPollTimer = 0, supportSending = false;
+let shownWarningIds = new Set(), warningPollTimer = 0;
 const emptyAdminDb = () => ({version:1, users:{}, events:[]});
 function readAdminDb() {
   const raw = readStore(ADMIN_DB_KEY, null);
@@ -120,10 +139,56 @@ function logAction(action, details = '', targetId = '') {
       }).catch(() => {});
     }
     if (activeView === 'admin' && isOwner(currentAccount)) renderAdmin();
+    if (isOwner(currentAccount)) updateAdminAlert();
   } catch {}
 }
 function unreadWarnings(accountId) {
   return adminUserRecord(accountId).warnings.filter(warning => !warning.read);
+}
+function readSupportThread() {
+  try {
+    const value = JSON.parse(localStorage.getItem(SUPPORT_THREAD_KEY));
+    if (value && typeof value === 'object' && value.id && value.secret) return value;
+  } catch {}
+  return null;
+}
+function saveSupportThread(value) {
+  supportThreadState = value || null;
+  try {
+    if (supportThreadState) localStorage.setItem(SUPPORT_THREAD_KEY, JSON.stringify(supportThreadState));
+    else localStorage.removeItem(SUPPORT_THREAD_KEY);
+  } catch {}
+}
+function saveAdminSeen(value = Date.now()) {
+  adminSeenAt = value;
+  try { localStorage.setItem(ADMIN_SEEN_KEY, String(value)); } catch {}
+}
+function adminUnreadCount() {
+  if (!isOwner(currentAccount)) return 0;
+  const seen = +adminSeenAt || 0;
+  const ownId = String(currentAccount?.id || '');
+  const events = (CLOUD_ENABLED ? adminEvents : adminDb.events).filter(event => {
+    const actorId = String(event?.actor?.id || '');
+    return (+event?.at || 0) > seen && actorId !== ownId;
+  });
+  const users = (CLOUD_ENABLED ? adminUsers : accounts).filter(account => !isOwner(account) && (+account?.created || 0) > seen);
+  const support = adminSupportThreads.filter(thread => {
+    const updated = +thread?.updated || 0;
+    const lastSender = String(thread?.lastSender || (thread?.ownerUnread ? 'user' : ''));
+    return updated > seen && lastSender === 'user';
+  });
+  return events.length + users.length + support.length;
+}
+function updateAdminAlert() {
+  const dot = $('#adminNavDot');
+  if (!dot) return;
+  const visible = isOwner(currentAccount) && activeView !== 'admin' && adminUnreadCount() > 0;
+  dot.hidden = !visible;
+  dot.title = visible ? `Новых уведомлений: ${adminUnreadCount()}` : 'Есть новые уведомления';
+}
+function markAdminSeen() {
+  saveAdminSeen();
+  updateAdminAlert();
 }
 
 // --- Облако Supabase -------------------------------------------------------
@@ -141,7 +206,11 @@ const cloudErrorMessages = {
   forbidden: 'Недостаточно прав.',
   target_not_found: 'Профиль не найден.',
   owner_protected: 'Аккаунт владельца удалить нельзя.',
-  warning_empty: 'Введите текст предупреждения.'
+  warning_empty: 'Введите текст предупреждения.',
+  support_invalid: 'Не удалось открыть чат поддержки. Попробуйте ещё раз.',
+  support_forbidden: 'Этот чат поддержки недоступен.',
+  support_empty: 'Введите сообщение.',
+  support_not_found: 'Обращение в поддержку не найдено.'
 };
 function cloudErrorText(raw) {
   const key = String(raw || '').trim().toLowerCase();
@@ -348,13 +417,15 @@ function confirmDelete(label, callback) {
 }
 function showView(view) {
   if (view === 'admin' && !isOwner(currentAccount)) view = 'overview';
+  if (activeView === 'admin' && view !== 'admin') markAdminSeen();
   activeView = view;
   $$('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`));
-  $$('.nav-item').forEach(el => { el.classList.toggle('active', el.dataset.view === view); el.setAttribute('aria-current', el.dataset.view === view ? 'page' : 'false'); });
+  $$('.nav-item[data-view]').forEach(el => { el.classList.toggle('active', el.dataset.view === view); el.setAttribute('aria-current', el.dataset.view === view ? 'page' : 'false'); });
   $('#sidebar').classList.remove('open'); window.scrollTo({top:0,behavior:'smooth'});
-  if (view === 'admin') renderAdmin();
+  if (view === 'admin') { markAdminSeen(); renderAdmin(); }
+  updateAdminAlert();
 }
-$$('.nav-item').forEach(el => el.onclick = () => showView(el.dataset.view));
+$$('.nav-item[data-view]').forEach(el => el.onclick = () => showView(el.dataset.view));
 $$('[data-view-target]').forEach(el => el.onclick = () => showView(el.dataset.viewTarget));
 $('#menuBtn').onclick = () => $('#sidebar').classList.toggle('open');
 $('.user-mini').setAttribute('role','button'); $('.user-mini').tabIndex = 0;
@@ -506,38 +577,59 @@ function themeTone(hsl, shift=0, alpha=1) {
   const hue=((hsl.hue+shift)%360+360)%360;
   return `hsla(${hue.toFixed(1)}, ${hsl.saturation.toFixed(1)}%, ${hsl.lightness.toFixed(1)}%, ${alpha})`;
 }
+function themeContrast(rgb) {
+  const luminance = (rgb[0] * 0.299 + rgb[1] * 0.587 + rgb[2] * 0.114) / 255;
+  return luminance > 0.62 ? '#101722' : '#ffffff';
+}
 function applyTheme() {
-  const light = state.theme === 'light';
-  document.documentElement.dataset.theme = state.theme;
-  const themeBtn = $('#themeBtn'); if (themeBtn) themeBtn.textContent = light ? '☾' : '☼';
-  const color = '#76a9ff', accent = themeRgb(color), hsl = themeHsl(color);
+  const theme = ['dark','black','light'].includes(state.theme) ? state.theme : 'dark';
+  const preset = THEME_PRESETS[state.accent] || THEME_PRESETS.blue;
+  const light = theme === 'light', black = theme === 'black';
+  const color = preset.color, accent = themeRgb(color), hsl = themeHsl(color);
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset.accent = state.accent;
+  const themeBtn = $('#themeBtn');
+  if (themeBtn) {
+    themeBtn.textContent = light ? '☾' : black ? '◐' : '☼';
+    themeBtn.title = `Тема: ${THEME_LABELS[theme]}. Нажми, чтобы переключить светлую/тёмную.`;
+  }
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', light ? '#eef3f9' : black ? '#000000' : '#0d1017');
   document.documentElement.style.setProperty('--blue', color);
-  document.documentElement.style.setProperty('--accent-ink', light ? '#3e72c9' : '#76a9ff');
-  document.documentElement.style.setProperty('--accent-contrast', '#fff');
+  document.documentElement.style.setProperty('--accent-ink', light ? themeRgbCss(mixThemeColor([62,114,201],accent,.12)) : color);
+  document.documentElement.style.setProperty('--accent-contrast', themeContrast(accent));
   document.documentElement.style.setProperty('--accent-2', themeTone(hsl,46));
   document.documentElement.style.setProperty('--accent-3', themeTone(hsl,-52));
   document.documentElement.style.setProperty('--accent-gradient', `linear-gradient(135deg, ${themeTone(hsl,38)}, ${color} 48%, ${themeTone(hsl,-42)})`);
-  if (light) {
-    // Белая тема остаётся без изменений.
-    const base = {bg:'#f3f6fb',sidebar:'#eaf0f8',panel:'#ffffff',panel2:'#f5f8fc',line:'#d2dce9'};
-    const weights = {bg:.12,sidebar:.18,panel:.06,panel2:.10,line:.22};
-    for (const key of ['bg','sidebar','panel','panel2','line']) document.documentElement.style.setProperty(`--${key}`,themeRgbCss(mixThemeColor(themeRgb(base[key]),accent,weights[key])));
-    const textStyles = {text:['#141c2a',.04],muted:['#4b596e',.14],dim:['#4f5c70',.10]};
-    for (const [key,[baseColor,amount]] of Object.entries(textStyles)) document.documentElement.style.setProperty(`--${key}`,themeRgbCss(mixThemeColor(themeRgb(baseColor),accent,amount)));
-    const glow=.20, glow2=.14;
-    document.documentElement.style.setProperty('--bg-gradient', `radial-gradient(circle at 14% 18%, ${themeTone(hsl,0,glow)} 0%, transparent 54%), radial-gradient(circle at 86% 14%, ${themeTone(hsl,54,glow2)} 0%, transparent 52%), radial-gradient(circle at 52% 92%, ${themeTone(hsl,-58,glow2)} 0%, transparent 58%)`);
-  } else {
-    // Тёмная тема возвращена к исходному виду.
-    const base = {bg:'#0d1017',sidebar:'#11151d',panel:'#151a23',panel2:'#191f29',line:'#29303b'};
-    const weights = {bg:.13,sidebar:.18,panel:.10,panel2:.13,line:.24};
-    for (const key of ['bg','sidebar','panel','panel2','line']) document.documentElement.style.setProperty(`--${key}`,themeRgbCss(mixThemeColor(themeRgb(base[key]),accent,weights[key])));
-    const textStyles = {text:['#f4f5f8',.05],muted:['#8b93a3',.12],dim:['#626b7b',.14]};
-    for (const [key,[baseColor,amount]] of Object.entries(textStyles)) document.documentElement.style.setProperty(`--${key}`,themeRgbCss(mixThemeColor(themeRgb(baseColor),accent,amount)));
-    const glow=.26, glow2=.19;
-    document.documentElement.style.setProperty('--bg-gradient', `radial-gradient(circle at 14% 18%, ${themeTone(hsl,0,glow)} 0%, transparent 54%), radial-gradient(circle at 86% 14%, ${themeTone(hsl,54,glow2)} 0%, transparent 52%), radial-gradient(circle at 52% 92%, ${themeTone(hsl,-58,glow2)} 0%, transparent 58%)`);
-  }
+  const base = light
+    ? {bg:'#f3f6fb',sidebar:'#eaf0f8',panel:'#ffffff',panel2:'#f5f8fc',line:'#d2dce9'}
+    : black
+      ? {bg:'#000000',sidebar:'#050505',panel:'#0a0a0a',panel2:'#111111',line:'#252525'}
+      : {bg:'#0d1017',sidebar:'#11151d',panel:'#151a23',panel2:'#191f29',line:'#29303b'};
+  const weights = light
+    ? {bg:.12,sidebar:.18,panel:.06,panel2:.10,line:.22}
+    : black
+      ? {bg:.12,sidebar:.16,panel:.11,panel2:.15,line:.28}
+      : {bg:.13,sidebar:.18,panel:.10,panel2:.13,line:.24};
+  for (const key of ['bg','sidebar','panel','panel2','line']) document.documentElement.style.setProperty(`--${key}`,themeRgbCss(mixThemeColor(themeRgb(base[key]),accent,weights[key])));
+  const textStyles = light
+    ? {text:['#141c2a',.04],muted:['#4b596e',.14],dim:['#4f5c70',.10]}
+    : black
+      ? {text:['#f7f7f7',.04],muted:['#9a9a9a',.10],dim:['#686868',.12]}
+      : {text:['#f4f5f8',.05],muted:['#8b93a3',.12],dim:['#626b7b',.14]};
+  for (const [key,[baseColor,amount]] of Object.entries(textStyles)) document.documentElement.style.setProperty(`--${key}`,themeRgbCss(mixThemeColor(themeRgb(baseColor),accent,amount)));
+  const glow = light ? .20 : black ? .34 : .26, glow2 = light ? .14 : black ? .26 : .19;
+  const ambient = light ? .22 : black ? .48 : .34;
+  document.documentElement.style.setProperty('--bg-gradient', `radial-gradient(circle at 14% 18%, ${themeTone(hsl,0,glow)} 0%, transparent 54%), radial-gradient(circle at 86% 14%, ${themeTone(hsl,54,glow2)} 0%, transparent 52%), radial-gradient(circle at 52% 92%, ${themeTone(hsl,-58,glow2)} 0%, transparent 58%)`);
+  document.documentElement.style.setProperty('--ambient-a', themeTone(hsl,0,ambient));
+  document.documentElement.style.setProperty('--ambient-b', themeTone(hsl,54,ambient * .86));
+  document.documentElement.style.setProperty('--ambient-c', themeTone(hsl,-58,ambient * .8));
+  document.documentElement.style.setProperty('--ambient-opacity', light ? '.28' : black ? '.62' : '.48');
 }
-$('#themeBtn').onclick = () => { state.theme = state.theme === 'light' ? 'dark' : 'light'; applyTheme(); persist(); logAction('переключил тему', state.theme === 'light' ? 'Светлая тема' : 'Тёмная тема'); };
+$('#themeBtn').onclick = () => {
+  state.theme = state.theme === 'light' ? 'dark' : 'light';
+  applyTheme(); renderThemePreferences(); persist();
+  logAction('переключил тему', THEME_LABELS[state.theme] || 'Тёмная');
+};
 applyTheme();
 
 function editTask(id, date = today()) {
@@ -1444,8 +1536,29 @@ $('#musicSort').onclick=()=>{const modes=['new','day','week','month','year'];mus
 document.addEventListener('change',e=>{if(e.target.matches('.hit-select')){const track=state.tracks.find(t=>t.id===e.target.dataset.track);if(track){track.hit=e.target.value;persist();renderMusic();}}});
 
 // Settings only expose actions that have a real local implementation.
-$('.preferences').innerHTML=`<div class="preference-row" id="accountPreference"></div><div class="preference-row"><div><strong>Утренний план</strong><span>Показывать напоминание при открытии после 08:00</span></div><button class="toggle" data-setting="morning" aria-label="Утренний план"><i></i></button></div><div class="preference-row"><div><strong>Звук выполнения</strong><span>Короткий сигнал при завершении задачи</span></div><button class="toggle" data-setting="sound" aria-label="Звук выполнения"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать колокольчик напоминаний</span></div><button class="toggle" data-setting="focus" aria-label="Фокус-режим"><i></i></button></div><div id="securityPreferences"></div><div class="preference-row"><div><strong>Хранение данных</strong><span>${CLOUD_ENABLED?'Синхронизируется с облаком Supabase. Аудио и видео — в этом браузере.':'Автоматически в этом браузере. Аудио и видео — в IndexedDB.'}</span></div>${button('export','','Экспорт данных')}</div>`;
+$('.preferences').innerHTML=`<div id="themePreferences"></div><div class="preference-row" id="accountPreference"></div><div class="preference-row"><div><strong>Утренний план</strong><span>Показывать напоминание при открытии после 08:00</span></div><button class="toggle" data-setting="morning" aria-label="Утренний план"><i></i></button></div><div class="preference-row"><div><strong>Звук выполнения</strong><span>Короткий сигнал при завершении задачи</span></div><button class="toggle" data-setting="sound" aria-label="Звук выполнения"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать колокольчик напоминаний</span></div><button class="toggle" data-setting="focus" aria-label="Фокус-режим"><i></i></button></div><div id="securityPreferences"></div><div class="preference-row"><div><strong>Хранение данных</strong><span>${CLOUD_ENABLED?'Синхронизируется с облаком Supabase. Аудио и видео — в этом браузере.':'Автоматически в этом браузере. Аудио и видео — в IndexedDB.'}</span></div>${button('export','','Экспорт данных')}</div>`;
+function renderThemePreferences(){
+  const box=$('#themePreferences'); if(!box)return;
+  const accents=Object.entries(THEME_PRESETS).map(([key,item])=>`<option value="${key}" ${state.accent===key?'selected':''}>${escapeHtml(item.label)}</option>`).join('');
+  box.innerHTML=`<div class="theme-preferences"><div class="theme-pref-head"><div><strong>Оформление</strong><span>Тема и цвет акцента · фон плавно переливается</span></div><span class="theme-preview-dot" style="--preview:${THEME_PRESETS[state.accent]?.color||'#76a9ff'}"></span></div><div class="theme-pref-grid"><label class="theme-field">Тема<select id="themeSelect">${Object.entries(THEME_LABELS).map(([key,label])=>`<option value="${key}" ${state.theme===key?'selected':''}>${label}</option>`).join('')}</select></label><label class="theme-field">Цвет<select id="accentSelect">${accents}</select></label></div><div class="theme-swatches">${Object.entries(THEME_PRESETS).map(([key,item])=>`<button type="button" class="theme-swatch ${state.accent===key?'active':''}" data-accent="${key}" style="--swatch:${item.color}" title="${escapeHtml(item.label)}" aria-label="${escapeHtml(item.label)}"></button>`).join('')}</div></div>`;
+  $('#themeSelect').onchange=e=>{
+    state.theme=['dark','black','light'].includes(e.target.value)?e.target.value:'dark';
+    applyTheme();persist();renderThemePreferences();
+    logAction('изменил тему',THEME_LABELS[state.theme]||'Тёмная');
+  };
+  $('#accentSelect').onchange=e=>{
+    state.accent=THEME_PRESETS[e.target.value]?e.target.value:'blue';
+    applyTheme();persist();renderThemePreferences();
+    logAction('изменил цвет темы',THEME_PRESETS[state.accent].label);
+  };
+  $$('.theme-swatch',box).forEach(swatch=>swatch.onclick=()=>{
+    state.accent=THEME_PRESETS[swatch.dataset.accent]?swatch.dataset.accent:'blue';
+    applyTheme();persist();renderThemePreferences();
+    logAction('изменил цвет темы',THEME_PRESETS[state.accent].label);
+  });
+}
 function renderSettings(){
+  renderThemePreferences();
   $$('[data-setting]').forEach(el=>{el.classList.toggle('on',state.settings[el.dataset.setting]);el.setAttribute('aria-pressed',String(state.settings[el.dataset.setting]));});
   $('#notificationsBtn').hidden=state.settings.focus;
   const security=$('#securityPreferences');
@@ -1462,33 +1575,52 @@ let adminSearch='',adminUsers=[],adminEvents=[],adminLoadedAt=0,adminRefreshSeq=
 const formatAdminDate=value=>value?new Date(value).toLocaleDateString('ru-RU',{day:'numeric',month:'short',year:'numeric'}):'—';
 const formatAdminDateTime=value=>value?new Date(value).toLocaleString('ru-RU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'—';
 const adminInitials=account=>String(account?.name||account?.alias||account?.email||'?').split(/\s+/).filter(Boolean).slice(0,2).map(part=>part[0]).join('').toUpperCase()||'?';
+function adminPhotoData(account){
+  let local=null;
+  if(account?.id){
+    try{local=normalizeState(readStore(ACCOUNT_PREFIX+account.id,null)||emptyState());}catch{}
+  }
+  const photo=account?.photo||local?.profile?.photo||'';
+  const source=photo?account:local?.profile;
+  const x=Math.min(100,Math.max(0,+(source?.photoX??50)));
+  const y=Math.min(100,Math.max(0,+(source?.photoY??50)));
+  const scale=Math.min(2.5,Math.max(1,+(source?.photoScale??1)));
+  return {photo,x,y,scale};
+}
+function adminAvatarMarkup(account,extraClass=''){
+  const {photo,x,y,scale}=adminPhotoData(account);
+  const cls=`avatar admin-avatar${extraClass?` ${extraClass}`:''}`;
+  if(!photo)return `<span class="${cls}">${escapeHtml(adminInitials(account))}</span>`;
+  return `<span class="${cls} has-photo"><img src="${escapeHtml(photo)}" alt="Аватар ${escapeHtml(account?.name||account?.alias||'')}" style="object-position:${x}% ${y}%;transform:scale(${scale})"></span>`;
+}
 function updateAdminAccess(){
   const owner=isOwner(currentAccount),nav=$('#adminNav');
   if(nav)nav.hidden=!owner;
   if(!owner&&activeView==='admin')showView('overview');
-  const count=$('#adminNavCount');
-  if(count&&owner)count.textContent=CLOUD_ENABLED?adminUsers.length:accounts.length;
+  if(owner&&!adminSeenAt)saveAdminSeen();
+  updateAdminAlert();
   if(owner&&CLOUD_ENABLED&&Date.now()-adminLoadedAt>5000)refreshAdminData();
 }
 async function refreshAdminData(){
   if(!cloudSessionActive()||!isOwner(currentAccount))return;
   const seq=++adminRefreshSeq;
   adminLoadedAt=Date.now();
-  try{
-    const [users,events]=await Promise.all([
-      cloudRpc('sphere_admin_users',{p_id:currentAccount.id,p_token:currentAccount.token}),
-      cloudRpc('sphere_admin_events',{p_id:currentAccount.id,p_token:currentAccount.token,p_limit:200})
-    ]);
-    if(seq!==adminRefreshSeq)return;
-    adminUsers=Array.isArray(users)?users:[];
-    adminEvents=Array.isArray(events)?events:[];
-    const count=$('#adminNavCount');if(count)count.textContent=adminUsers.length;
-    if(activeView==='admin'&&isOwner(currentAccount))renderAdminCached();
-  }catch(error){
-    if(!error.cloudUnavailable&&Date.now()-cloudWarnedAt>15000){
-      cloudWarnedAt=Date.now();toast(error.message,true);
-    }
+  const [usersResult,eventsResult,supportResult]=await Promise.allSettled([
+    cloudRpc('sphere_admin_users',{p_id:currentAccount.id,p_token:currentAccount.token}),
+    cloudRpc('sphere_admin_events',{p_id:currentAccount.id,p_token:currentAccount.token,p_limit:200}),
+    cloudRpc('sphere_support_threads',{p_id:currentAccount.id,p_token:currentAccount.token})
+  ]);
+  if(seq!==adminRefreshSeq)return;
+  if(usersResult.status==='fulfilled')adminUsers=Array.isArray(usersResult.value)?usersResult.value:[];
+  if(eventsResult.status==='fulfilled')adminEvents=Array.isArray(eventsResult.value)?eventsResult.value:[];
+  adminSupportAvailable=supportResult.status==='fulfilled';
+  if(adminSupportAvailable)adminSupportThreads=Array.isArray(supportResult.value)?supportResult.value:[];
+  const failure=[usersResult,eventsResult].find(result=>result.status==='rejected')?.reason;
+  if(failure&&!failure.cloudUnavailable&&Date.now()-cloudWarnedAt>15000){
+    cloudWarnedAt=Date.now();toast(failure.message,true);
   }
+  updateAdminAlert();
+  if(activeView==='admin'&&isOwner(currentAccount))renderAdminCached();
 }
 function renderAdminStats(){
   const box=$('#adminStats');if(!box)return;
@@ -1524,7 +1656,7 @@ function renderAdminUsers(){
     const lastSeen=CLOUD_ENABLED?(+account.lastSeen||0):(record.lastSeen||0);
     const owner=isOwner(account);
     return `<div class="admin-user-row">
-      <div class="admin-user-id"><span class="avatar admin-avatar">${escapeHtml(adminInitials(account))}</span><div><strong>${escapeHtml(account.name||account.alias||'Без имени')}${owner?'<em class="admin-owner-badge">владелец</em>':''}</strong><span>@${escapeHtml(account.alias||'без_псевдонима')} · ${escapeHtml(account.email||'')}</span><small>${lastSeen?`Был(а): ${formatAdminDateTime(lastSeen)}`:'Ещё не входил(а)'}</small></div></div>
+      <div class="admin-user-id">${adminAvatarMarkup(account)}<div><strong>${escapeHtml(account.name||account.alias||'Без имени')}${owner?'<em class="admin-owner-badge">владелец</em>':''}</strong><span>@${escapeHtml(account.alias||'без_псевдонима')} · ${escapeHtml(account.email||'')}</span><small>${lastSeen?`Был(а): ${formatAdminDateTime(lastSeen)}`:'Ещё не входил(а)'}</small></div></div>
       <span class="admin-date">${formatAdminDate(account.created)}</span>
       <span class="admin-warn-pill ${warnCount?'has':''}">${warnCount?`⚑ ${warnCount}`:'—'}</span>
       <div class="admin-user-actions">${button('admin-profile',account.id,'Профиль','text-btn')}${button('admin-warn',account.id,'Предупредить','text-btn')}${owner?'':button('admin-delete',account.id,'Удалить','text-btn admin-danger')}</div>
@@ -1536,14 +1668,31 @@ function renderAdminLog(){
   const events=(CLOUD_ENABLED?adminEvents:adminDb.events).slice(0,120);
   box.innerHTML=events.length?events.map(event=>{
     const actor=event.actor||{};
-    return `<div class="admin-log-item"><span class="admin-log-dot">•</span><div class="admin-log-body"><div class="admin-log-top"><strong>${escapeHtml(actor.name||actor.alias||actor.email||'Гость')}</strong><small>${formatAdminDateTime(event.at)}</small></div><p><b>${escapeHtml(event.action||'событие')}</b>${event.details?`<span>${escapeHtml(event.details)}</span>`:''}</p>${actor.email?`<small class="admin-log-email">${escapeHtml(actor.email)}</small>`:''}</div></div>`;
+    return `<div class="admin-log-item" data-log-event="${escapeHtml(event.id)}" role="button" tabindex="0"><span class="admin-log-dot">•</span><div class="admin-log-body"><div class="admin-log-top"><strong>${escapeHtml(actor.name||actor.alias||actor.email||'Гость')}</strong><small>${formatAdminDateTime(event.at)}</small></div><p><b>${escapeHtml(event.action||'событие')}</b>${event.details?`<span>${escapeHtml(event.details)}</span>`:''}</p>${actor.email?`<small class="admin-log-email">${escapeHtml(actor.email)}</small>`:''}</div></div>`;
   }).join(''):'<div class="admin-empty">Журнал пока пуст. Действия пользователей появятся здесь.</div>';
+}
+function renderAdminSupport(){
+  const box=$('#adminSupportList');if(!box)return;
+  const meta=$('#adminSupportMeta');if(meta)meta.textContent=adminSupportThreads.length;
+  if(!adminSupportAvailable){
+    box.innerHTML='<div class="admin-empty">Чат поддержки ещё не подключён. Выполните <b>supabase-support-update.sql</b> в Supabase SQL Editor.</div>';
+    return;
+  }
+  if(!adminSupportThreads.length){
+    box.innerHTML='<div class="admin-empty">Обращений пока нет. Сообщения с экрана входа и из профиля появятся здесь.</div>';
+    return;
+  }
+  box.innerHTML=adminSupportThreads.map(thread=>{
+    const name=thread.name||thread.email||'Гость';
+    const preview=String(thread.preview||'').replace(/\s+/g,' ').slice(0,150);
+    return `<button type="button" class="admin-support-row" data-support-thread="${escapeHtml(thread.id)}"><span class="admin-support-avatar">${escapeHtml(String(name).slice(0,2).toUpperCase())}</span><div><strong>${escapeHtml(name)}${thread.ownerUnread?'<i class="admin-support-unread">новое</i>':''}</strong><span>${escapeHtml(thread.email||'')}${thread.alias?` · @${escapeHtml(thread.alias)}`:''}</span><p>${preview?escapeHtml(preview):'Нет сообщений'}</p></div><div class="admin-support-meta"><small>${formatAdminDateTime(thread.updated)}</small><b>${thread.messages||0}</b></div></button>`;
+  }).join('');
 }
 function renderAdminCached(){
   if(!isOwner(currentAccount))return;
   if(!CLOUD_ENABLED)syncAdminDb();
-  renderAdminStats();renderAdminUsers();renderAdminLog();
-  const count=$('#adminNavCount');if(count)count.textContent=CLOUD_ENABLED?adminUsers.length:accounts.length;
+  renderAdminStats();renderAdminUsers();renderAdminLog();renderAdminSupport();
+  updateAdminAlert();
 }
 function renderAdmin(){
   if(!isOwner(currentAccount))return;
@@ -1553,7 +1702,7 @@ function renderAdmin(){
 function adminProfileMarkup(account,warnings,stats,lastSeen){
   const owner=isOwner(account),id=account.id;
   const warningMarkup=warnings.length?warnings.map(warning=>`<div class="admin-warning"><div><strong>${escapeHtml(warning.text)}</strong><small>${formatAdminDateTime(warning.created)}${warning.by?` · ${escapeHtml(warning.by)}`:''}${warning.read?' · прочитано':' · новое'}</small></div></div>`).join(''):'<p class="admin-empty compact">Предупреждений нет.</p>';
-  return `<div class="admin-profile-head"><span class="avatar admin-avatar">${escapeHtml(adminInitials(account))}</span><div><h3>${escapeHtml(account.name||account.alias||'Без имени')}</h3><p>@${escapeHtml(account.alias||'без_псевдонима')} · ${escapeHtml(account.email||'')}</p>${owner?'<span class="admin-owner-badge">владелец</span>':''}</div></div><div class="admin-profile-stats"><div><strong>${+stats.tasks||0}</strong><span>задач</span></div><div><strong>${+stats.completed||0}</strong><span>выполнено</span></div><div><strong>${+stats.goals||0}</strong><span>целей</span></div><div><strong>${+stats.tracks||0}</strong><span>треков</span></div></div><div class="admin-profile-meta"><span><b>Создан:</b> ${formatAdminDate(account.created)}</span><span><b>Последний вход:</b> ${lastSeen?formatAdminDateTime(lastSeen):'ещё не входил(а)'}</span><span><b>ID:</b> ${escapeHtml(account.id)}</span></div><div class="admin-warning-list"><div class="admin-subhead"><strong>Предупреждения</strong><span>${warnings.length}</span></div>${warningMarkup}</div><div class="admin-profile-actions">${button('admin-warn',id,'Выдать предупреждение','secondary-btn')}${owner?'':button('admin-delete',id,'Удалить профиль','secondary-btn admin-danger')}</div>`;
+  return `<div class="admin-profile-head">${adminAvatarMarkup(account,'admin-avatar-large')}<div><h3>${escapeHtml(account.name||account.alias||'Без имени')}</h3><p>@${escapeHtml(account.alias||'без_псевдонима')} · ${escapeHtml(account.email||'')}</p>${owner?'<span class="admin-owner-badge">владелец</span>':''}</div></div><div class="admin-profile-stats"><div><strong>${+stats.tasks||0}</strong><span>задач</span></div><div><strong>${+stats.completed||0}</strong><span>выполнено</span></div><div><strong>${+stats.goals||0}</strong><span>целей</span></div><div><strong>${+stats.tracks||0}</strong><span>треков</span></div></div><div class="admin-profile-meta"><span><b>Создан:</b> ${formatAdminDate(account.created)}</span><span><b>Последний вход:</b> ${lastSeen?formatAdminDateTime(lastSeen):'ещё не входил(а)'}</span><span><b>ID:</b> ${escapeHtml(account.id)}</span></div><div class="admin-warning-list"><div class="admin-subhead"><strong>Предупреждения</strong><span>${warnings.length}</span></div>${warningMarkup}</div><div class="admin-profile-actions">${button('admin-warn',id,'Выдать предупреждение','secondary-btn')}${owner?'':button('admin-delete',id,'Удалить профиль','secondary-btn admin-danger')}</div>`;
 }
 async function adminProfileDialog(id){
   if(CLOUD_ENABLED){
@@ -1650,6 +1799,241 @@ function adminClearLog(){
 $('#adminSearch')?.addEventListener('input',e=>{adminSearch=e.target.value;renderAdminUsers();});
 $('#adminExport')?.addEventListener('click',adminExportDb);
 $('#adminClearLog')?.addEventListener('click',adminClearLog);
+$('#adminSupportRefresh')?.addEventListener('click',()=>{adminLoadedAt=0;refreshAdminData();});
+
+// --- Предупреждения, поддержка и подробный журнал -------------------------
+document.body.insertAdjacentHTML('beforeend', `
+<dialog id="warningDialog" class="warning-dialog card" aria-labelledby="warningTitle">
+  <button type="button" class="modal-close" id="warningClose" aria-label="Закрыть">×</button>
+  <div class="warning-icon">⚑</div>
+  <p class="eyebrow">СООБЩЕНИЕ ОТ АДМИНИСТРАТОРА</p>
+  <h2 id="warningTitle">Предупреждение</h2>
+  <div class="warning-body" id="warningList"></div>
+  <form method="dialog"><button class="primary-btn warning-ok" type="submit">Понятно</button></form>
+</dialog>
+<dialog id="supportDialog" class="support-dialog card" aria-labelledby="supportTitle">
+  <button type="button" class="modal-close" id="supportClose" aria-label="Закрыть">×</button>
+  <header class="support-head"><span class="support-mark">✉</span><div><p class="eyebrow">ПОДДЕРЖКА СФЕРЫ</p><h2 id="supportTitle">Чат с поддержкой</h2><span id="supportSub">Smooktobër · 369turush@gmail.com</span></div></header>
+  <div class="support-identity" id="supportIdentity"></div>
+  <div class="support-messages" id="supportMessages"></div>
+  <p class="support-status" id="supportStatus" role="alert"></p>
+  <form class="support-form" id="supportForm"><textarea id="supportInput" rows="2" maxlength="2000" placeholder="Напишите сообщение…" required></textarea><button class="primary-btn" type="submit" id="supportSend">Отправить</button></form>
+</dialog>
+<dialog id="adminSupportDialog" class="support-dialog admin-support-dialog card" aria-labelledby="adminSupportTitle">
+  <button type="button" class="modal-close" id="adminSupportClose" aria-label="Закрыть">×</button>
+  <header class="support-head"><span class="support-mark">✉</span><div><p class="eyebrow">ПОДДЕРЖКА · ДИАЛОГ</p><h2 id="adminSupportTitle">Обращение</h2><span id="adminSupportSub"></span></div></header>
+  <div class="support-messages" id="adminSupportMessages"></div>
+  <p class="support-status" id="adminSupportStatus" role="alert"></p>
+  <form class="support-form" id="adminSupportForm"><textarea id="adminSupportInput" rows="2" maxlength="2000" placeholder="Ответ пользователю…" required></textarea><button class="primary-btn" type="submit">Ответить</button></form>
+</dialog>
+<dialog id="adminLogDialog" class="admin-log-dialog card" aria-labelledby="adminLogTitle">
+  <div class="admin-log-dialog-head"><div><p class="eyebrow">АУДИТ</p><h2 id="adminLogTitle">Журнал действий</h2></div><label class="admin-search admin-log-search"><span>⌕</span><input id="adminLogSearch" type="search" placeholder="Поиск по действию, пользователю, деталям" autocomplete="off" /></label><button type="button" class="modal-close" id="adminLogClose" aria-label="Закрыть">×</button></div>
+  <div class="admin-log-dialog-body"><div class="admin-log-full-list" id="adminLogFullList"></div><aside class="admin-log-detail" id="adminLogDetail"></aside></div>
+</dialog>`);
+
+const warningDialog=$('#warningDialog');
+$('#warningClose').onclick=()=>warningDialog.close();
+warningDialog.addEventListener('click',e=>{if(e.target===warningDialog)warningDialog.close();});
+function showWarnings(list){
+  const pending=(Array.isArray(list)?list:[]).filter(warning=>warning&&warning.text&&!shownWarningIds.has(String(warning.id||warning.text)));
+  if(!pending.length)return;
+  pending.forEach(warning=>shownWarningIds.add(String(warning.id||warning.text)));
+  $('#warningList').innerHTML=pending.map(warning=>`<div class="warning-card"><strong>${escapeHtml(warning.text)}</strong><small>${warning.by?`${escapeHtml(warning.by)} · `:''}${formatAdminDateTime(warning.created)}</small></div>`).join('');
+  $('#warningTitle').textContent=pending.length>1?`Новые предупреждения · ${pending.length}`:'Предупреждение';
+  if(!warningDialog.open)warningDialog.showModal();
+}
+async function pollWarnings(){
+  if(!cloudSessionActive()||document.visibilityState==='hidden')return;
+  try{
+    const list=await cloudRpc('sphere_warnings_take',{p_id:currentAccount.id,p_token:currentAccount.token});
+    if(Array.isArray(list)&&list.length)showWarnings(list);
+  }catch{}
+}
+function startWarningPolling(){
+  clearInterval(warningPollTimer);
+  warningPollTimer=setInterval(pollWarnings,25000);
+}
+
+function supportErrorText(error){
+  const message=String(error?.message||'');
+  if(message.includes('Could not find the function')||message.includes('function public.sphere_support'))return 'Чат поддержки ещё не активирован. Напишите на 369turush@gmail.com.';
+  return message||'Не удалось связаться с поддержкой.';
+}
+function supportIdentityMarkup(){
+  const box=$('#supportIdentity');if(!box)return;
+  if(currentAccount){
+    box.innerHTML=`<div class="support-login-line">Вы вошли как <strong>${escapeHtml(state.profile.name||currentAccount.name||currentAccount.alias)}</strong><span>${escapeHtml(currentAccount.email)}</span></div>`;
+    return;
+  }
+  if(supportThreadState){
+    box.innerHTML=`<div class="support-login-line">Гость<span>${escapeHtml(supportThreadState.email||'')}</span></div>`;
+    return;
+  }
+  box.innerHTML=`<div class="form-row"><label>Имя<input id="supportName" maxlength="80" placeholder="Как к вам обращаться"></label><label>Email<input id="supportEmail" type="email" maxlength="120" placeholder="you@example.com"></label></div>`;
+}
+function supportMessagesMarkup(list,viewer='user'){
+  if(!list.length)return '<div class="support-empty">Напишите первое сообщение — владелец увидит его в админ-панели.</div>';
+  return list.map(message=>{
+    const owner=message.sender==='owner';
+    const label=owner?(viewer==='owner'?'Вы · поддержка':'Поддержка'):(viewer==='owner'?'Пользователь':'Вы');
+    return `<div class="support-msg ${owner?'owner':'user'}"><div class="support-bubble">${escapeHtml(message.body).replace(/\n/g,'<br>')}</div><small>${escapeHtml(label)} · ${formatAdminDateTime(message.created)}</small></div>`;
+  }).join('');
+}
+function scrollSupportBox(selector){const box=$(selector);if(box)box.scrollTop=box.scrollHeight;}
+async function supportPayload(){
+  if(!supportThreadState)return null;
+  return {p_thread:supportThreadState.id,p_secret_hash:await hashSecret(supportThreadState.secret,'sphere-support'),p_account:currentAccount?.id||null,p_token:currentAccount?.token||null};
+}
+async function loadSupportMessages(silent=false){
+  const payload=await supportPayload();if(!payload)return;
+  try{
+    const data=await cloudRpc('sphere_support_fetch',payload);
+    if(data&&Array.isArray(data.messages))supportMessages=data.messages;
+    if(data?.thread&&supportThreadState){supportThreadState={...supportThreadState,email:data.thread.email||supportThreadState.email,name:data.thread.name||supportThreadState.name};}
+    $('#supportMessages').innerHTML=supportMessagesMarkup(supportMessages,'user');
+    scrollSupportBox('#supportMessages');
+    if(!silent)$('#supportStatus').textContent='';
+  }catch(error){
+    if(!silent)$('#supportStatus').textContent=supportErrorText(error);
+  }
+}
+function startSupportPolling(){
+  clearInterval(supportPollTimer);
+  supportPollTimer=setInterval(()=>{if($('#supportDialog').open)loadSupportMessages(true);},6000);
+}
+function stopSupportPolling(){clearInterval(supportPollTimer);supportPollTimer=0;}
+async function openSupportDialog(){
+  const dialog=$('#supportDialog');
+  supportIdentityMarkup();
+  $('#supportStatus').textContent='';
+  $('#supportMessages').innerHTML=supportThreadState?'<div class="support-empty">Загружаем сообщения…</div>':'<div class="support-empty">Напишите первое сообщение — владелец увидит его в админ-панели.</div>';
+  if(!dialog.open)dialog.showModal();
+  if(supportThreadState){await loadSupportMessages();startSupportPolling();}
+  setTimeout(()=>$('#supportInput')?.focus(),80);
+}
+$('#authSupport')?.addEventListener('click',openSupportDialog);
+$('#supportNav')?.addEventListener('click',openSupportDialog);
+$('#supportClose').onclick=()=>$('#supportDialog').close();
+$('#supportDialog').addEventListener('click',e=>{if(e.target===$('#supportDialog'))$('#supportDialog').close();});
+$('#supportDialog').addEventListener('close',stopSupportPolling);
+async function createSupportThread(){
+  let email=currentAccount?.email||'',name=currentAccount?state.profile.name||currentAccount.name||currentAccount.alias:'';
+  if(!supportThreadState){
+    if(!currentAccount){
+      email=String($('#supportEmail')?.value||'').trim().toLowerCase();
+      name=String($('#supportName')?.value||'').trim();
+      if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))throw new Error('Укажите корректный email для ответа.');
+    }
+    const id=uid(),secret=randomHex(24);
+    await cloudRpc('sphere_support_open',{p_thread:id,p_account:currentAccount?.id||null,p_email:email,p_name:name||'Гость',p_alias:currentAccount?.alias||'',p_secret_hash:await hashSecret(secret,'sphere-support')});
+    saveSupportThread({id,secret,email,name});
+    supportIdentityMarkup();
+  }
+  return supportThreadState;
+}
+$('#supportForm').onsubmit=async e=>{
+  e.preventDefault();
+  if(supportSending)return;
+  const input=$('#supportInput'),text=String(input.value||'').trim();
+  if(!text){$('#supportStatus').textContent='Введите сообщение.';return;}
+  supportSending=true;$('#supportSend').disabled=true;$('#supportStatus').textContent='';
+  try{
+    const thread=await createSupportThread();
+    await cloudRpc('sphere_support_send',{p_thread:thread.id,p_secret_hash:await hashSecret(thread.secret,'sphere-support'),p_account:currentAccount?.id||null,p_token:currentAccount?.token||null,p_body:text});
+    input.value='';
+    await loadSupportMessages(true);
+    startSupportPolling();
+  }catch(error){
+    if(String(error?.code||'').toLowerCase()==='support_not_found'){
+      saveSupportThread(null);supportIdentityMarkup();$('#supportStatus').textContent='Обращение не найдено. Напишите новое сообщение.';
+    }else{
+      $('#supportStatus').textContent=supportErrorText(error);
+    }
+  }finally{
+    supportSending=false;$('#supportSend').disabled=false;
+  }
+};
+
+async function loadAdminSupportThread(id,silent=false){
+  const status=$('#adminSupportStatus');if(status&&!silent)status.textContent='';
+  try{
+    const data=await cloudRpc('sphere_support_thread',{p_id:currentAccount.id,p_token:currentAccount.token,p_thread:id});
+    adminSupportCurrent=data?.thread||null;
+    $('#adminSupportTitle').textContent=adminSupportCurrent?.name||adminSupportCurrent?.email||'Обращение';
+    $('#adminSupportSub').textContent=[adminSupportCurrent?.email,adminSupportCurrent?.alias?`@${adminSupportCurrent.alias}`:''].filter(Boolean).join(' · ');
+    $('#adminSupportMessages').innerHTML=supportMessagesMarkup(Array.isArray(data?.messages)?data.messages:[],'owner');
+    scrollSupportBox('#adminSupportMessages');
+    await refreshAdminData();
+  }catch(error){
+    if(status)status.textContent=supportErrorText(error);
+  }
+}
+async function openAdminSupportThread(id){
+  const dialog=$('#adminSupportDialog');
+  $('#adminSupportMessages').innerHTML='<div class="support-empty">Загружаем диалог…</div>';
+  $('#adminSupportStatus').textContent='';
+  if(!dialog.open)dialog.showModal();
+  await loadAdminSupportThread(id);
+}
+const adminSupportDialog=$('#adminSupportDialog');
+$('#adminSupportClose').onclick=()=>adminSupportDialog.close();
+adminSupportDialog.addEventListener('click',e=>{if(e.target===adminSupportDialog)adminSupportDialog.close();});
+$('#adminSupportList').addEventListener('click',e=>{const row=e.target.closest('[data-support-thread]');if(row)openAdminSupportThread(row.dataset.supportThread);});
+$('#adminSupportForm').onsubmit=async e=>{
+  e.preventDefault();
+  const input=$('#adminSupportInput'),text=String(input.value||'').trim();
+  if(!text)return;
+  if(!adminSupportCurrent?.id){$('#adminSupportStatus').textContent='Сначала выберите обращение.';return;}
+  const btn=$('#adminSupportForm button[type="submit"]');btn.disabled=true;
+  try{
+    await cloudRpc('sphere_support_reply',{p_id:currentAccount.id,p_token:currentAccount.token,p_thread:adminSupportCurrent.id,p_body:text});
+    input.value='';
+    await loadAdminSupportThread(adminSupportCurrent.id,true);
+  }catch(error){
+    $('#adminSupportStatus').textContent=supportErrorText(error);
+  }finally{btn.disabled=false;}
+};
+
+let adminLogSelectedId='';
+const adminLogDialog=$('#adminLogDialog');
+function adminLogEventsSource(){return CLOUD_ENABLED?adminEvents:adminDb.events;}
+function adminLogFilteredEvents(query=''){
+  const needle=String(query||'').trim().toLowerCase();
+  const events=adminLogEventsSource();
+  if(!needle)return events;
+  return events.filter(event=>{
+    const actor=event.actor||{};
+    return [event.action,event.details,event.targetId,event.id,actor.name,actor.alias,actor.email,actor.id].filter(Boolean).some(value=>String(value).toLowerCase().includes(needle));
+  });
+}
+function adminLogDetailMarkup(event){
+  if(!event)return '<div class="admin-empty">Выберите событие слева, чтобы увидеть подробности.</div>';
+  const actor=event.actor||{};
+  return `<p class="eyebrow">СОБЫТИЕ</p><h3>${escapeHtml(event.action||'событие')}</h3><div class="admin-log-detail-body">${event.details?`<p class="admin-log-detail-text">${escapeHtml(event.details)}</p>`:'<p class="admin-log-detail-text muted">Без дополнительного описания</p>'}<dl><dt>Когда</dt><dd>${formatAdminDateTime(event.at)}</dd><dt>Пользователь</dt><dd>${escapeHtml(actor.name||actor.alias||actor.email||'Гость')}</dd><dt>Псевдоним</dt><dd>${actor.alias?`@${escapeHtml(actor.alias)}`:'—'}</dd><dt>Email</dt><dd>${escapeHtml(actor.email||'—')}</dd><dt>ID пользователя</dt><dd class="mono">${escapeHtml(actor.id||'—')}</dd><dt>Объект действия</dt><dd class="mono">${escapeHtml(event.targetId||'—')}</dd><dt>ID события</dt><dd class="mono">${escapeHtml(event.id||'—')}</dd></dl></div>`;
+}
+function renderAdminLogFull(){
+  const list=$('#adminLogFullList');if(!list)return;
+  const events=adminLogFilteredEvents($('#adminLogSearch')?.value||'');
+  if(!events.some(event=>event.id===adminLogSelectedId))adminLogSelectedId=events[0]?.id||'';
+  list.innerHTML=events.length?events.map(event=>{
+    const actor=event.actor||{};
+    return `<button type="button" class="admin-log-full-item ${event.id===adminLogSelectedId?'active':''}" data-log-event="${escapeHtml(event.id)}"><span class="admin-log-full-top"><strong>${escapeHtml(actor.name||actor.alias||actor.email||'Гость')}</strong><small>${formatAdminDateTime(event.at)}</small></span><b>${escapeHtml(event.action||'событие')}</b>${event.details?`<span>${escapeHtml(event.details)}</span>`:''}</button>`;
+  }).join(''):'<div class="admin-empty">События не найдены.</div>';
+  $('#adminLogDetail').innerHTML=adminLogDetailMarkup(events.find(event=>event.id===adminLogSelectedId));
+}
+function openAdminLogDialog(id=''){
+  adminLogSelectedId=id||adminLogSelectedId;
+  const search=$('#adminLogSearch');if(search)search.value='';
+  renderAdminLogFull();
+  if(!adminLogDialog.open)adminLogDialog.showModal();
+}
+$('#adminLogFull')?.addEventListener('click',()=>openAdminLogDialog());
+$('#adminLogClose').onclick=()=>adminLogDialog.close();
+adminLogDialog.addEventListener('click',e=>{if(e.target===adminLogDialog)adminLogDialog.close();});
+$('#adminLogSearch')?.addEventListener('input',()=>{adminLogSelectedId='';renderAdminLogFull();});
+$('#adminLogFullList').addEventListener('click',e=>{const item=e.target.closest('[data-log-event]');if(!item)return;adminLogSelectedId=item.dataset.logEvent;renderAdminLogFull();});
+$('#adminLogList').addEventListener('click',e=>{const item=e.target.closest('[data-log-event]');if(item)openAdminLogDialog(item.dataset.logEvent);});
+$('#adminLogList').addEventListener('keydown',e=>{const item=e.target.closest('[data-log-event]');if(item&&(e.key==='Enter'||e.key===' ')){e.preventDefault();openAdminLogDialog(item.dataset.logEvent);}});
 
 function stopCurrentTrack(){playGeneration++;embedPlaying=false;audio.pause();audio.removeAttribute('src');audio.load();currentTrack='';if(objectURL)URL.revokeObjectURL(objectURL);objectURL='';stopAura();$('#nowPlayingTitle').textContent='Нет активного трека';$('#nowPlayingArtist').textContent='';$('.album-art').innerHTML='<span>♪</span>';$('#playBtn').textContent='▶';$('#musicHero').classList.add('empty-player');$('#musicHero').classList.remove('embed-playing','aura-on');$('#musicProgressBar')?.classList.remove('disabled','seeking');musicProgressUpdate();renderMusic();}
 document.addEventListener('click',async e=>{
@@ -1768,8 +2152,9 @@ async function startSession(account, options = {}) {
   }
   if(warnings.length){
     if(!useCloud){warnings.forEach(warning=>warning.read=true);saveAdminDb();}
-    setTimeout(()=>toast(`Предупреждение администратора: ${warnings.map(warning=>warning.text).join(' · ')}`,true),900);
+    setTimeout(()=>showWarnings(warnings),650);
   }
+  if(useCloud)startWarningPolling();
 }
 async function logoutAccount() {
   logAction('вышел из аккаунта',currentAccount?.email||'');
@@ -1958,6 +2343,9 @@ $('#musicProgress').style.width='0%';
 
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')saveCloudNow();});
 window.addEventListener('pagehide',()=>{saveCloudNow();});
+setInterval(()=>{
+  if(document.visibilityState==='visible'&&cloudSessionActive()&&isOwner(currentAccount)&&Date.now()-adminLoadedAt>60000)refreshAdminData();
+},60000);
 
 function hydrateCachedSession(){
   if(!currentAccount)return;

@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=29" />
+  <link rel="stylesheet" href="style.css?v=30" />
 </head>
 <body class="auth-locked">
   <section class="auth-screen" id="authScreen" hidden>
@@ -41,6 +41,7 @@
         <button class="text-btn auth-forgot" type="button" data-auth-tab="login">← Назад ко входу</button>
       </form>
       <p class="auth-message" id="authMessage" role="alert"></p>
+      <div class="auth-support-row"><button class="text-btn auth-support" id="authSupport" type="button">✉ Связаться с поддержкой</button><span>Smooktobër · 369turush@gmail.com</span></div>
       <p class="auth-note">Облачный аккаунт · данные синхронизируются между устройствами</p>
     </div>
   </section>
@@ -59,10 +60,11 @@
       <nav class="main-nav">
         <button class="nav-item" data-view="goals"><span class="nav-icon">◎</span>Мои цели</button>
         <button class="nav-item" data-view="profile"><span class="nav-icon">◉</span>Личный кабинет</button>
-        <button class="nav-item" data-view="admin" id="adminNav" hidden><span class="nav-icon">⚑</span>Админ-панель <b class="nav-count" id="adminNavCount">0</b></button>
+        <button class="nav-item" data-view="admin" id="adminNav" hidden><span class="nav-icon">⚑</span>Админ-панель <i class="admin-pulse" id="adminNavDot" title="Есть новые уведомления" hidden></i></button>
       </nav>
       <div class="sidebar-bottom">
         <div class="focus-mini"><div class="mini-orbit">◌</div><div><span>Фокус дня</span><strong>74% энергии</strong></div></div>
+        <button class="nav-item" id="supportNav" type="button"><span class="nav-icon">✉</span>Поддержка <i class="support-pulse" id="supportNavDot" hidden></i></button>
         <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span>Настройки</button>
         <div class="user-mini"><div class="avatar">АИ</div><div><strong>Алексей Иванов</strong><span>Мой аккаунт</span></div><span class="more">···</span></div>
       </div>
@@ -119,10 +121,14 @@
               <div class="admin-user-list" id="adminUserList"></div>
             </article>
             <article class="card admin-log-card">
-              <div class="admin-card-head"><div><p class="eyebrow">АУДИТ</p><h3>Журнал действий</h3></div><button class="text-btn" id="adminClearLog">Очистить</button></div>
+              <div class="admin-card-head"><div><p class="eyebrow">АУДИТ</p><h3>Журнал действий</h3></div><div class="admin-card-actions"><button class="text-btn" id="adminLogFull">На весь экран</button><button class="text-btn" id="adminClearLog">Очистить</button></div></div>
               <div class="admin-log-list" id="adminLogList"></div>
             </article>
           </div>
+          <article class="card admin-support-card">
+            <div class="admin-card-head"><div><p class="eyebrow">СВЯЗЬ</p><h3>Поддержка <small id="adminSupportMeta">0</small></h3></div><button class="text-btn" id="adminSupportRefresh">Обновить</button></div>
+            <div class="admin-support-list" id="adminSupportList"></div>
+          </article>
         </section>
       </div>
     </main>
@@ -131,6 +137,6 @@
   <div class="modal-backdrop" id="modal"><div class="modal card"><button class="modal-close" id="closeModal">×</button><p class="eyebrow">НОВЫЙ ШАГ</p><h2>Добавить задачу</h2><p class="modal-sub">Что поможет твоему дню стать лучше?</p><label>Название задачи<input id="taskInput" type="text" placeholder="Например, закончить презентацию" /></label><div class="form-row"><label>Время<input id="timeInput" type="time" value="10:00" /></label><label>Приоритет<select id="priorityInput"><option value="blue">Обычный</option><option value="orange">Важный</option><option value="purple">Высокий</option></select></label></div><div class="modal-actions"><button class="secondary-btn" id="cancelModal">Отмена</button><button class="primary-btn" id="saveTask">Добавить задачу</button></div></div></div>
   <div class="toast" id="toast"><span>✓</span><div><strong>Готово</strong><small>Изменения сохранены</small></div></div>
   <div class="focus-modal" id="focusModal"><div class="focus-modal-inner card"><button class="modal-close" id="closeFocus">×</button><p class="eyebrow">РЕЖИМ ФОКУСА</p><div class="timer" id="timer">25:00</div><p class="subheading">Один шаг за раз. Ты справишься.</p><button class="primary-btn" id="timerStart">Запустить таймер</button></div></div>
-  <script src="app.js?v=29"></script>
+  <script src="app.js?v=30"></script>
 </body>
 </html>
