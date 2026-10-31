@@ -863,4 +863,62 @@ html.source-guard-open,html.source-guard-open body{overflow:hidden!important}
   .source-guard,.source-guard-card,.source-guard-emoji{animation:none!important}
 }
 
+/* ============================================================
+   Технические работы, громкость, присутствие и удаление
+   предупреждений
+   ============================================================ */
+.maintenance-card{position:relative;isolation:isolate;overflow:hidden;display:grid;justify-items:center;gap:9px;text-align:center;padding:54px 30px 48px;background:radial-gradient(circle at 16% 14%,color-mix(in srgb,var(--blue) 20%,transparent),transparent 38%),radial-gradient(circle at 84% 84%,color-mix(in srgb,var(--accent-3,var(--blue)) 16%,transparent),transparent 42%),var(--panel)}
+.maintenance-card:before{content:"";position:absolute;inset:0;z-index:-1;background-image:linear-gradient(135deg,color-mix(in srgb,var(--panel2) 76%,var(--blue) 24%),transparent 58%);opacity:.45}
+.maintenance-icon{width:74px;height:74px;display:grid;place-items:center;border-radius:23px;font-size:34px;background:color-mix(in srgb,var(--blue) 16%,var(--panel2));border:1px solid color-mix(in srgb,var(--blue) 35%,var(--line));box-shadow:0 18px 50px color-mix(in srgb,var(--blue) 22%,transparent);margin-bottom:5px}
+.maintenance-card .eyebrow{margin:0;color:color-mix(in srgb,var(--blue) 70%,var(--muted))}
+.maintenance-card h2{font:800 clamp(24px,3.2vw,36px)/1.1 Manrope,sans-serif;letter-spacing:-.9px;margin:0}
+.maintenance-card p:not(.eyebrow){max-width:520px;margin:0;color:var(--muted);font-size:13px;line-height:1.65}
+.maintenance-card .secondary-btn{margin-top:13px;padding:11px 19px}
+html[data-theme="light"] .maintenance-card{background:radial-gradient(circle at 16% 14%,color-mix(in srgb,var(--blue) 13%,transparent),transparent 38%),radial-gradient(circle at 84% 84%,color-mix(in srgb,var(--accent-3,var(--blue)) 10%,transparent),transparent 42%),var(--panel)}
+html[data-theme="black"] .maintenance-card{background:radial-gradient(circle at 16% 14%,color-mix(in srgb,var(--blue) 15%,transparent),transparent 40%),#080808}
+
+/* Громкость трека */
+.volume-control{display:flex;align-items:center;justify-content:center;gap:10px;width:min(320px,100%);margin:16px auto 0;padding:8px 12px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb,var(--panel2) 82%,transparent)}
+.volume-control button{width:28px;height:28px;flex:none;display:grid;place-items:center;border-radius:8px;background:transparent;color:var(--muted);font-size:14px;transition:background .18s ease,color .18s ease}
+.volume-control button:hover{background:color-mix(in srgb,var(--blue) 14%,var(--panel));color:var(--text)}
+.volume-control input[type="range"]{flex:1;min-width:0;height:4px;appearance:none;-webkit-appearance:none;border-radius:20px;background:linear-gradient(90deg,var(--blue),color-mix(in srgb,var(--blue) 45%,var(--line)));accent-color:var(--blue);cursor:pointer}
+.volume-control input[type="range"]::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:var(--blue);border:2px solid var(--panel);box-shadow:0 2px 8px #0006}
+.volume-control input[type="range"]::-moz-range-thumb{width:11px;height:11px;border-radius:50%;background:var(--blue);border:2px solid var(--panel);box-shadow:0 2px 8px #0006}
+.volume-control input[type="range"]:focus-visible{outline:2px solid var(--blue);outline-offset:5px}
+.volume-control #volumeValue{flex:none;min-width:38px;text-align:right;color:var(--muted);font-size:10px;font-variant-numeric:tabular-nums}
+.volume-control.is-disabled{opacity:.58}
+.volume-control.is-disabled input{cursor:not-allowed}
+html[data-theme="light"] .volume-control{background:#fff;border-color:#d9e4f1}
+
+/* Статус «в сети» */
+.presence{display:inline-flex;align-items:center;gap:6px;font-style:normal;font-size:9px;font-weight:500;line-height:1.2;color:var(--muted);white-space:nowrap}
+.presence:before{content:"";width:6px;height:6px;flex:none;border-radius:50%;background:#7b8798;box-shadow:0 0 0 3px #7b87981a}
+.presence.online{color:#83e0ab}
+.presence.online:before{background:#4ade80;box-shadow:0 0 0 3px #4ade8026,0 0 10px #4ade8066}
+.presence.offline:before{background:#7b8798}
+.support-head .presence{display:inline-flex;margin-top:4px;padding:3px 8px;border-radius:20px;background:color-mix(in srgb,var(--panel) 70%,transparent);border:1px solid var(--line)}
+.support-head .presence.online{border-color:color-mix(in srgb,#4ade80 32%,var(--line));background:color-mix(in srgb,#4ade80 9%,var(--panel))}
+.admin-support-meta .presence{justify-content:flex-end;font-size:8px}
+.admin-user-id .presence{display:inline-flex;font-size:9px}
+
+/* Удаление предупреждения — только в админ-профиле */
+.admin-warning{display:flex;align-items:flex-start;gap:9px}
+.admin-warning>div{flex:1;min-width:0}
+.admin-warning-delete{flex:none;width:23px;height:23px;display:grid;place-items:center;border-radius:7px;border:1px solid color-mix(in srgb,#ff9d9d 22%,var(--line));background:transparent;color:var(--muted);font-size:13px;line-height:1;transition:background .18s ease,color .18s ease,border-color .18s ease}
+.admin-warning-delete:hover{background:color-mix(in srgb,#ff9d9d 15%,var(--panel2));border-color:color-mix(in srgb,#ff9d9d 48%,var(--line));color:#ffb3b3}
+.admin-warning-delete:focus-visible{outline:2px solid #ff9d9d;outline-offset:2px}
+html[data-theme="light"] .admin-warning-delete{color:#8a6a3f}
+
+@media(max-width:720px){
+  .maintenance-card{padding:38px 20px 34px}
+  .maintenance-icon{width:62px;height:62px;font-size:28px;border-radius:19px}
+  .volume-control{margin-top:13px;padding:7px 10px}
+  .support-head .presence{font-size:8px;padding:2px 7px}
+  .admin-support-meta .presence{font-size:8px}
+}
+@media(prefers-reduced-motion:reduce){
+  .maintenance-card:before{opacity:.35}
+  .volume-control button,.admin-warning-delete{transition:none!important}
+}
+
 
