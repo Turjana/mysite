@@ -75,13 +75,20 @@ const firstAccountSeed = !currentAccount && accounts.length === 0 ? JSON.parse(J
 // Локальная админ-база: карточки пользователей, предупреждения и журнал действий.
 const ADMIN_DB_KEY = 'sphere-admin-db';
 const ADMIN_SEEN_KEY = 'sphere-admin-seen';
+const ADMIN_NOTIFY_KEY = 'sphere-admin-notify';
 const SUPPORT_THREAD_KEY = 'sphere-support-thread';
 const ADMIN_LOG_LIMIT = 600;
+const SUPPORT_FILE_LIMIT = 2 * 1024 * 1024;
 let adminSeenAt = +localStorage.getItem(ADMIN_SEEN_KEY) || 0;
 let adminSupportThreads = [], adminSupportCurrent = null, adminSupportAvailable = true, adminSupportPollTimer = 0;
 let supportThreadState = readSupportThread(), supportMessages = [], supportPollTimer = 0, supportSending = false;
+let supportAttachment = null, adminSupportAttachment = null;
+let adminNotifyStore = readStore(ADMIN_NOTIFY_KEY, null);
+let adminNotifySeen = adminNotifyStore && typeof adminNotifyStore==='object' && adminNotifyStore.seen && typeof adminNotifyStore.seen==='object' ? adminNotifyStore.seen : {};
+let adminNotifyInitialized = !!adminNotifyStore?.initialized, adminNotifyBusy = false;
 let shownWarningIds = new Set(), warningPollTimer = 0;
 let adminRefreshBusy = false, adminLiveTimer = 0, presenceTimer = 0, presenceLastAt = 0;
+let ageGateResolve = null;
 const emptyAdminDb = () => ({version:1, users:{}, events:[]});
 function readAdminDb() {
   const raw = readStore(ADMIN_DB_KEY, null);
@@ -211,8 +218,9 @@ const cloudErrorMessages = {
   warning_empty: 'Введите текст предупреждения.',
   support_invalid: 'Не удалось открыть чат поддержки. Попробуйте ещё раз.',
   support_forbidden: 'Этот чат поддержки недоступен.',
-  support_empty: 'Введите сообщение.',
-  support_not_found: 'Обращение в поддержку не найдено.'
+  support_empty: 'Введите сообщение или прикрепите файл.',
+  support_not_found: 'Обращение в поддержку не найдено.',
+  support_file_too_large: 'Файл слишком большой для отправки. Прикрепите файл меньше 2 МБ.'
 };
 function cloudErrorText(raw) {
   const key = String(raw || '').trim().toLowerCase();
@@ -421,6 +429,7 @@ function showView(view) {
   if (view === 'admin' && !isOwner(currentAccount)) view = 'overview';
   if (activeView === 'admin' && view !== 'admin') markAdminSeen();
   activeView = view;
+  applyCabinetBackground();
   $$('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`));
   $$('.nav-item[data-view]').forEach(el => { el.classList.toggle('active', el.dataset.view === view); el.setAttribute('aria-current', el.dataset.view === view ? 'page' : 'false'); });
   $('#sidebar').classList.remove('open'); window.scrollTo({top:0,behavior:'smooth'});
@@ -809,6 +818,14 @@ function photoAccent(photo) {
   };
   image.src = photo;
 }
+function cabinetBackgroundValue(){
+  return isOwner(currentAccount) ? String(state.profile.cabinetBg||'') : '';
+}
+function applyCabinetBackground(){
+  const value=cabinetBackgroundValue();
+  document.documentElement.style.setProperty('--cabinet-bg',value?`url("${value}")`:'none');
+  document.body.classList.toggle('profile-cabinet-bg',!!value&&activeView==='profile'&&!document.body.classList.contains('auth-locked'));
+}
 function renderProfile() {
   $$('.avatar,.profile-avatar').forEach(el=>el.innerHTML=avatarMarkup());
   $$('.avatar img,.profile-avatar img').forEach(img=>{img.style.objectPosition=`${state.profile.photoX??50}% ${state.profile.photoY??50}%`;img.style.transform=`scale(${state.profile.photoScale||1})`;});
@@ -822,6 +839,9 @@ function renderProfile() {
   const owner=isOwner(currentAccount);
   const prefix=$('#profileOwner');
   if(prefix){prefix.hidden=!owner;prefix.textContent=state.profile.status||'✦ В своём ритме';}
+  const cabinetBtn=$('#profileCabinetBgBtn');
+  if(cabinetBtn){cabinetBtn.hidden=!owner;cabinetBtn.classList.toggle('has-bg',!!cabinetBackgroundValue());}
+  applyCabinetBackground();
   $('#profileAliasLine').textContent=`@${state.profile.alias||'без_псевдонима'}`;
   $$('.profile-status').forEach(el=>el.remove());
   const favorites=state.tracks.filter(track=>track.favorite);
@@ -1026,12 +1046,12 @@ function sourcesEditor(){
 }
 $('#manageSources').onclick=sourcesEditor;
 document.addEventListener('click',e=>{const remove=e.target.closest('[data-remove-source]');if(remove){state.newsSources.splice(+remove.dataset.removeSource,1);persist();renderNews();toast('Источник удалён');sourcesEditor();}});
-async function imageData(file) {
+async function imageData(file,maxSide=900,quality=.86) {
   if(!file || !file.size) return null;
   if(!file.type.startsWith('image/')) throw new Error('Выберите изображение.');
-  const bitmap=await createImageBitmap(file), scale=Math.min(1,900/Math.max(bitmap.width,bitmap.height));
+  const bitmap=await createImageBitmap(file), scale=Math.min(1,maxSide/Math.max(bitmap.width,bitmap.height));
   const canvas=document.createElement('canvas');canvas.width=Math.round(bitmap.width*scale);canvas.height=Math.round(bitmap.height*scale);
-  canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close();return canvas.toDataURL('image/jpeg',.86);
+  canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close();return canvas.toDataURL('image/jpeg',quality);
 }
 function probeVideoDuration(url) {
   return new Promise((resolve,reject)=>{
@@ -1185,10 +1205,14 @@ function editProfile() {
         throw error;
       }
     }
-    const newPhoto=await imageData(data.get('photo'));
+    const photoFile=data.get('photo');
+    const videoFile=data.get('video');
+    if((photoFile?.size||videoFile?.size)&&!(await requireAdult('Установка фото на аватар и фона возле аватарки доступна только с подтверждением 18+.'))){
+      throw new Error('Сохранение отменено: нужно подтвердить возраст 18+.');
+    }
+    const newPhoto=await imageData(photoFile);
     const removePhoto=data.has('removePhoto');
     const photo=removePhoto&&!newPhoto?'':(newPhoto||state.profile.photo);
-    const videoFile=data.get('video');
     let video=state.profile.video,videoDuration=+state.profile.videoDuration||0;
     if(data.has('removeVideo')){video='';videoDuration=0;}
     else if(videoFile?.size){const info=await videoData(videoFile);video=info.key;videoDuration=info.duration;}
@@ -1202,7 +1226,20 @@ function editProfile() {
   initPhotoCrop();
   loadProfileVideoPreview();
 }
+function editCabinetBackground(){
+  if(!isOwner(currentAccount)){toast('Фон личного кабинета может менять только владелец.',true);return;}
+  const hasBg=!!cabinetBackgroundValue();
+  openEditor('Фон личного кабинета',`<p class="help-text">Это фон всей страницы личного кабинета, а не область рядом с аватаркой. Изображение видно только владельцу.</p>${field('Новое изображение',input('bg','','file','accept="image/*"'))}${hasBg?'<label class="checkbox-label"><input type="checkbox" name="removeBg"> Удалить текущий фон</label>':''}`,async data=>{
+    const file=data.get('bg');
+    let value=data.has('removeBg')?'':cabinetBackgroundValue();
+    if(file?.size)value=await imageData(file,1920,.84);
+    if(value)state.profile.cabinetBg=value;else delete state.profile.cabinetBg;
+    logAction(value?'изменил фон личного кабинета':'убрал фон личного кабинета','');
+    saveAndRender();applyCabinetBackground();toast(value?'Фон личного кабинета сохранён':'Фон личного кабинета удалён');
+  },'Сохранить');
+}
 $$('[data-profile-tool="edit"]').forEach(b=>b.onclick=editProfile);
+$('#profileCabinetBgBtn')?.addEventListener('click',editCabinetBackground);
 $$('[data-profile-tool="layout"]').forEach(b=>b.onclick=()=>{
   const next=state.profile.layout==='row'?'card':'row';
   const toggle=()=>{state.profile.layout=next;persist();renderProfile();};
@@ -1636,7 +1673,10 @@ async function refreshAdminData(){
     if(usersResult.status==='fulfilled')adminUsers=Array.isArray(usersResult.value)?usersResult.value:[];
     if(eventsResult.status==='fulfilled')adminEvents=Array.isArray(eventsResult.value)?eventsResult.value:[];
     adminSupportAvailable=supportResult.status==='fulfilled';
-    if(adminSupportAvailable)adminSupportThreads=Array.isArray(supportResult.value)?supportResult.value:[];
+    if(adminSupportAvailable){
+      adminSupportThreads=Array.isArray(supportResult.value)?supportResult.value:[];
+      processSupportNotifications(adminSupportThreads);
+    }
     const failure=[usersResult,eventsResult].find(result=>result.status==='rejected')?.reason;
     if(failure&&!failure.cloudUnavailable&&Date.now()-cloudWarnedAt>15000){
       cloudWarnedAt=Date.now();toast(failure.message,true);
@@ -1659,7 +1699,9 @@ function startAdminLive(){
   adminLiveTimer=setInterval(()=>{
     if(document.visibilityState==='hidden')return;
     if(activeView==='admin'||$('#adminLogDialog')?.open)refreshAdminData();
+    else pollSupportNotifications();
   },3000);
+  pollSupportNotifications();
 }
 function stopAdminLive(){clearInterval(adminLiveTimer);adminLiveTimer=0;}
 async function presenceHeartbeat(force=false){
@@ -1747,7 +1789,7 @@ function renderAdminSupport(){
   box.innerHTML=adminSupportThreads.map(thread=>{
     const name=thread.name||thread.email||'Гость';
     const preview=String(thread.preview||'').replace(/\s+/g,' ').slice(0,150);
-    return `<button type="button" class="admin-support-row" data-support-thread="${escapeHtml(thread.id)}"><span class="admin-support-avatar">${escapeHtml(String(name).slice(0,2).toUpperCase())}</span><div><strong>${escapeHtml(name)}${thread.ownerUnread?'<i class="admin-support-unread">новое</i>':''}</strong><span>${escapeHtml(thread.email||'')}${thread.alias?` · @${escapeHtml(thread.alias)}`:''}</span><p>${preview?escapeHtml(preview):'Нет сообщений'}</p></div><div class="admin-support-meta"><small>${formatAdminDateTime(thread.updated)}</small><b>${thread.messages||0}</b>${thread.online!==undefined?presenceMarkup(thread.online,thread.lastSeen):''}</div></button>`;
+    return `<button type="button" class="admin-support-row" data-support-thread="${escapeHtml(thread.id)}">${supportAvatarMarkup(thread,'admin-support-avatar')}<div><strong>${escapeHtml(name)}${thread.ownerUnread?'<i class="admin-support-unread">новое</i>':''}</strong><span>${escapeHtml(thread.email||'')}${thread.alias?` · @${escapeHtml(thread.alias)}`:''}</span><p>${preview?escapeHtml(preview):'Нет сообщений'}</p></div><div class="admin-support-meta"><small>${formatAdminDateTime(thread.updated)}</small><b>${thread.messages||0}</b>${thread.online!==undefined?presenceMarkup(thread.online,thread.lastSeen):''}</div></button>`;
   }).join('');
 }
 function renderAdminCached(){
@@ -1985,14 +2027,14 @@ document.body.insertAdjacentHTML('beforeend', `
   <div class="support-identity" id="supportIdentity"></div>
   <div class="support-messages" id="supportMessages"></div>
   <p class="support-status" id="supportStatus" role="alert"></p>
-  <form class="support-form" id="supportForm"><textarea id="supportInput" rows="2" maxlength="2000" placeholder="Напишите сообщение…" required></textarea><button class="primary-btn" type="submit" id="supportSend">Отправить</button></form>
+  <form class="support-form" id="supportForm"><label class="support-attach" title="Прикрепить фото, аудио или документ"><span>📎</span><input id="supportFile" type="file" accept="image/*,audio/*,.pdf,.doc,.docx,.txt,.rtf,.csv,.xls,.xlsx,.ppt,.pptx,.zip,.rar,.7z,.epub"></label><div class="support-file-chip" id="supportFileChip" hidden></div><textarea id="supportInput" rows="2" maxlength="2000" placeholder="Напишите сообщение… Enter — отправить, Shift+Enter — новая строка"></textarea><button class="primary-btn" type="submit" id="supportSend">Отправить</button></form>
 </dialog>
 <dialog id="adminSupportDialog" class="support-dialog admin-support-dialog card" aria-labelledby="adminSupportTitle">
   <button type="button" class="modal-close" id="adminSupportClose" aria-label="Закрыть">×</button>
-  <header class="support-head"><span class="support-mark">✉</span><div><p class="eyebrow">ПОДДЕРЖКА · ДИАЛОГ</p><h2 id="adminSupportTitle">Обращение</h2><span id="adminSupportSub"></span><i class="presence offline" id="adminSupportPresence">Проверяем статус…</i></div></header>
+  <header class="support-head"><span class="support-mark">✉</span><div><p class="eyebrow">ПОДДЕРЖКА · ДИАЛОГ</p><h2 id="adminSupportTitle">Обращение</h2><span id="adminSupportSub"></span><i class="presence offline" id="adminSupportPresence">Проверяем статус…</i></div><button type="button" class="text-btn admin-support-hide" id="adminSupportHide" hidden>Удалить у себя</button></header>
   <div class="support-messages" id="adminSupportMessages"></div>
   <p class="support-status" id="adminSupportStatus" role="alert"></p>
-  <form class="support-form" id="adminSupportForm"><textarea id="adminSupportInput" rows="2" maxlength="2000" placeholder="Ответ пользователю…" required></textarea><button class="primary-btn" type="submit">Ответить</button></form>
+  <form class="support-form" id="adminSupportForm"><label class="support-attach" title="Прикрепить фото, аудио или документ"><span>📎</span><input id="adminSupportFile" type="file" accept="image/*,audio/*,.pdf,.doc,.docx,.txt,.rtf,.csv,.xls,.xlsx,.ppt,.pptx,.zip,.rar,.7z,.epub"></label><div class="support-file-chip" id="adminSupportFileChip" hidden></div><textarea id="adminSupportInput" rows="2" maxlength="2000" placeholder="Ответ пользователю… Enter — отправить, Shift+Enter — новая строка"></textarea><button class="primary-btn" type="submit">Ответить</button></form>
 </dialog>
 <dialog id="adminLogDialog" class="admin-log-dialog card" aria-labelledby="adminLogTitle">
   <div class="admin-log-dialog-head"><div><p class="eyebrow">АУДИТ</p><h2 id="adminLogTitle">Журнал действий</h2></div><label class="admin-search admin-log-search"><span>⌕</span><input id="adminLogSearch" type="search" placeholder="Поиск по действию, пользователю, деталям" autocomplete="off" /></label><button type="button" class="modal-close" id="adminLogClose" aria-label="Закрыть">×</button></div>
@@ -2002,7 +2044,15 @@ document.body.insertAdjacentHTML('beforeend', `
   <button type="button" class="modal-close" id="adminPhotoClose" aria-label="Закрыть">×</button>
   <div class="admin-photo-stage"><img id="adminPhotoImage" alt="Фото профиля" /></div>
   <div class="admin-photo-foot"><strong id="adminPhotoTitle">Фото профиля</strong><a class="text-btn" id="adminPhotoDownload" download>Скачать</a></div>
-</dialog>`);
+</dialog>
+<dialog id="ageGateDialog" class="age-gate-dialog card" aria-labelledby="ageGateTitle">
+  <div class="age-gate-badge">18+</div>
+  <p class="eyebrow">ПОДТВЕРЖДЕНИЕ ВОЗРАСТА</p>
+  <h2 id="ageGateTitle">Вам есть 18 лет?</h2>
+  <p class="age-gate-text" id="ageGateReason">Для этого действия нужно подтвердить совершеннолетие.</p>
+  <div class="modal-actions"><button type="button" class="secondary-btn" id="ageGateNo">Нет, отменить</button><button type="button" class="primary-btn" id="ageGateYes">Да, мне 18+</button></div>
+</dialog>
+<div class="support-notifications" id="supportNotifications" aria-live="polite" aria-label="Уведомления поддержки"></div>`);
 
 const warningDialog=$('#warningDialog');
 $('#warningClose').onclick=()=>warningDialog.close();
@@ -2031,6 +2081,97 @@ function startWarningPolling(){
   warningPollTimer=setInterval(pollWarnings,25000);
 }
 
+function settleAgeGate(value){
+  const resolve=ageGateResolve;ageGateResolve=null;
+  const dialog=$('#ageGateDialog');
+  if(dialog?.open)dialog.close();
+  if(resolve)resolve(!!value);
+}
+function requireAdult(reason='Для этого действия нужно подтвердить совершеннолетие.'){
+  const dialog=$('#ageGateDialog');
+  if(!dialog)return Promise.resolve(true);
+  if(dialog.open)settleAgeGate(false);
+  return new Promise(resolve=>{
+    ageGateResolve=resolve;
+    const text=$('#ageGateReason');if(text)text.textContent=reason;
+    dialog.showModal();
+  });
+}
+$('#ageGateYes').onclick=()=>settleAgeGate(true);
+$('#ageGateNo').onclick=()=>settleAgeGate(false);
+$('#ageGateDialog').addEventListener('cancel',e=>{e.preventDefault();settleAgeGate(false);});
+$('#ageGateDialog').addEventListener('click',e=>e.stopPropagation());
+
+function supportInitials(name){
+  return String(name||'Гость').split(/\s+/).filter(Boolean).slice(0,2).map(part=>part[0]).join('').toUpperCase()||'?';
+}
+function supportAvatarMarkup(thread,className='support-notify-avatar'){
+  const name=thread?.name||thread?.email||'Гость';
+  const photo=String(thread?.photo||'');
+  if(!photo)return `<span class="${className}">${escapeHtml(supportInitials(name))}</span>`;
+  const x=Math.min(100,Math.max(0,+(thread?.photoX??50)));
+  const y=Math.min(100,Math.max(0,+(thread?.photoY??50)));
+  const scale=Math.min(2.5,Math.max(1,+(thread?.photoScale??1)));
+  return `<span class="${className} has-photo"><img src="${escapeHtml(photo)}" alt="Аватар ${escapeHtml(name)}" style="object-position:${x}% ${y}%;transform:scale(${scale})"></span>`;
+}
+function persistAdminNotifySeen(){
+  try{localStorage.setItem(ADMIN_NOTIFY_KEY,JSON.stringify({initialized:adminNotifyInitialized,seen:adminNotifySeen}));}catch{}
+}
+function processSupportNotifications(threads){
+  if(!Array.isArray(threads)||!isOwner(currentAccount))return;
+  const present=new Set(threads.map(thread=>String(thread.id)));
+  threads.forEach(thread=>{
+    const id=String(thread.id),updated=+thread.updated||0,previous=+adminNotifySeen[id]||0;
+    const fresh=updated>previous;
+    const threadOpen=!!$('#adminSupportDialog')?.open&&String(adminSupportCurrent?.id||'')===id;
+    if(adminNotifyInitialized&&fresh&&thread.lastSender==='user'&&thread.ownerUnread&&!threadOpen)showSupportNotification(thread);
+    if(fresh)adminNotifySeen[id]=updated;
+  });
+  Object.keys(adminNotifySeen).forEach(id=>{if(!present.has(id))delete adminNotifySeen[id];});
+  adminNotifyInitialized=true;
+  persistAdminNotifySeen();
+}
+function showSupportNotification(thread){
+  const box=$('#supportNotifications');if(!box)return;
+  const name=thread?.name||thread?.email||'Гость';
+  const preview=String(thread?.preview||'').replace(/\s+/g,' ').trim()||'Новое сообщение';
+  const card=document.createElement('div');
+  card.className='support-notification';
+  card.dataset.supportThread=thread.id;
+  card.setAttribute('role','button');
+  card.tabIndex=0;
+  card.innerHTML=`${supportAvatarMarkup(thread)}<div class="support-notify-body"><small>НОВОЕ СООБЩЕНИЕ · ПОДДЕРЖКА</small><strong>${escapeHtml(name)}</strong><p>${escapeHtml(preview.slice(0,180))}</p><time>${formatAdminDateTime(thread.updated)}</time></div><button type="button" class="support-notify-close" aria-label="Закрыть уведомление">×</button>`;
+  box.appendChild(card);
+  requestAnimationFrame(()=>card.classList.add('show'));
+  let removed=false;
+  const remove=()=>{
+    if(removed)return;removed=true;
+    card.classList.remove('show');
+    setTimeout(()=>card.remove(),260);
+  };
+  card.addEventListener('click',e=>{
+    if(e.target.closest('.support-notify-close')){e.stopPropagation();remove();return;}
+    remove();openAdminSupportThread(thread.id);
+  });
+  card.addEventListener('keydown',e=>{
+    if(e.key==='Enter'||e.key===' '){e.preventDefault();remove();openAdminSupportThread(thread.id);}
+  });
+  setTimeout(remove,9000);
+}
+async function pollSupportNotifications(){
+  if(!cloudSessionActive()||!isOwner(currentAccount)||adminNotifyBusy||document.visibilityState==='hidden')return;
+  adminNotifyBusy=true;
+  try{
+    const threads=await cloudRpc('sphere_support_threads',{p_id:currentAccount.id,p_token:currentAccount.token});
+    if(Array.isArray(threads)){
+      adminSupportThreads=threads;adminSupportAvailable=true;
+      processSupportNotifications(threads);
+      if(activeView==='admin')renderAdminSupport();
+    }
+  }catch{}
+  finally{adminNotifyBusy=false;}
+}
+
 function supportErrorText(error){
   const message=String(error?.message||'');
   if(message.includes('Could not find the function')||message.includes('function public.sphere_support'))return 'Чат поддержки ещё не активирован. Напишите на 369turush@gmail.com.';
@@ -2048,12 +2189,77 @@ function supportIdentityMarkup(){
   }
   box.innerHTML=`<div class="form-row"><label>Имя<input id="supportName" maxlength="80" placeholder="Как к вам обращаться"></label><label>Email<input id="supportEmail" type="email" maxlength="120" placeholder="you@example.com"></label></div>`;
 }
+function humanFileSize(bytes){
+  const value=+bytes||0;
+  if(value>=1024*1024)return `${(value/1024/1024).toLocaleString('ru-RU',{maximumFractionDigits:1})} МБ`;
+  if(value>=1024)return `${Math.round(value/1024)} КБ`;
+  return `${value} Б`;
+}
+function fileToDataURL(file){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=()=>resolve(String(reader.result||''));
+    reader.onerror=()=>reject(new Error('Не удалось прочитать файл.'));
+    reader.readAsDataURL(file);
+  });
+}
+async function prepareSupportAttachment(file){
+  if(!file?.size)return null;
+  if(file.size>SUPPORT_FILE_LIMIT)throw new Error(`Файл должен быть не больше ${humanFileSize(SUPPORT_FILE_LIMIT)}.`);
+  let type=file.type||'application/octet-stream';
+  let data;
+  if(type.startsWith('image/')){
+    data=await imageData(file,1600,.82);
+    type='image/jpeg';
+  }else{
+    data=await fileToDataURL(file);
+  }
+  return {name:file.name||'Файл',type,size:file.size,data};
+}
+function supportAttachmentMarkup(attachment){
+  if(!attachment?.data)return '';
+  const name=String(attachment.name||'Файл');
+  const type=String(attachment.type||'');
+  const size=humanFileSize(attachment.size);
+  if(type.startsWith('image/')){
+    return `<a class="support-attachment support-attachment-image" href="${escapeHtml(attachment.data)}" target="_blank" rel="noopener" download="${escapeHtml(name)}"><img src="${escapeHtml(attachment.data)}" alt="${escapeHtml(name)}" loading="lazy"></a>`;
+  }
+  if(type.startsWith('audio/')){
+    return `<div class="support-attachment support-attachment-audio"><audio controls preload="metadata" src="${escapeHtml(attachment.data)}"></audio><small>${escapeHtml(name)} · ${size}</small></div>`;
+  }
+  return `<a class="support-attachment support-attachment-file" href="${escapeHtml(attachment.data)}" download="${escapeHtml(name)}"><span>📎</span><span><b>${escapeHtml(name)}</b><small>${size}</small></span></a>`;
+}
+function supportAttachmentUi(kind){
+  return kind==='admin'
+    ?{file:$('#adminSupportFile'),chip:$('#adminSupportFileChip'),value:()=>adminSupportAttachment}
+    :{file:$('#supportFile'),chip:$('#supportFileChip'),value:()=>supportAttachment};
+}
+function renderSupportAttachmentChip(kind){
+  const ui=supportAttachmentUi(kind),file=ui.value(),chip=ui.chip;
+  if(!chip)return;
+  if(!file){chip.hidden=true;chip.innerHTML='';return;}
+  const icon=file.type.startsWith('image/')?'🖼':file.type.startsWith('audio/')?'♫':'📎';
+  chip.hidden=false;
+  chip.innerHTML=`<span class="support-file-icon">${icon}</span><span class="support-file-copy"><strong>${escapeHtml(file.name||'Файл')}</strong><small>${humanFileSize(file.size)}${file.type.startsWith('image/')?' · нужно подтверждение 18+':''}</small></span><button type="button" class="support-file-remove" aria-label="Убрать файл">×</button>`;
+  $('.support-file-remove',chip).onclick=()=>clearSupportAttachment(kind);
+}
+function setSupportAttachment(kind,file){
+  if(kind==='admin')adminSupportAttachment=file||null;else supportAttachment=file||null;
+  renderSupportAttachmentChip(kind);
+}
+function clearSupportAttachment(kind){
+  const ui=supportAttachmentUi(kind);
+  setSupportAttachment(kind,null);
+  if(ui.file)ui.file.value='';
+}
 function supportMessagesMarkup(list,viewer='user'){
   if(!list.length)return '<div class="support-empty">Напишите первое сообщение — владелец увидит его в админ-панели.</div>';
   return list.map(message=>{
     const owner=message.sender==='owner';
     const label=owner?(viewer==='owner'?'Вы · поддержка':'Поддержка'):(viewer==='owner'?'Пользователь':'Вы');
-    return `<div class="support-msg ${owner?'owner':'user'}"><div class="support-bubble">${escapeHtml(message.body).replace(/\n/g,'<br>')}</div><small>${escapeHtml(label)} · ${formatAdminDateTime(message.created)}</small></div>`;
+    const body=message.body?escapeHtml(message.body).replace(/\n/g,'<br>'):'';
+    const attachment=supportAttachmentMarkup(message.attachment);
+    return `<div class="support-msg ${owner?'owner':'user'}"><div class="support-bubble ${attachment?'has-attachment':''}">${body}${attachment}</div><small>${escapeHtml(label)} · ${formatAdminDateTime(message.created)}</small></div>`;
   }).join('');
 }
 function scrollSupportBox(selector){const box=$(selector);if(box)box.scrollTop=box.scrollHeight;}
@@ -2097,7 +2303,7 @@ $('#authSupport')?.addEventListener('click',openSupportDialog);
 $('#supportNav')?.addEventListener('click',openSupportDialog);
 $('#supportClose').onclick=()=>$('#supportDialog').close();
 $('#supportDialog').addEventListener('click',e=>{if(e.target===$('#supportDialog'))$('#supportDialog').close();});
-$('#supportDialog').addEventListener('close',stopSupportPolling);
+$('#supportDialog').addEventListener('close',()=>{stopSupportPolling();clearSupportAttachment('user');});
 async function createSupportThread(){
   let email=currentAccount?.email||'',name=currentAccount?state.profile.name||currentAccount.name||currentAccount.alias:'';
   if(!supportThreadState){
@@ -2116,13 +2322,18 @@ async function createSupportThread(){
 $('#supportForm').onsubmit=async e=>{
   e.preventDefault();
   if(supportSending)return;
-  const input=$('#supportInput'),text=String(input.value||'').trim();
-  if(!text){$('#supportStatus').textContent='Введите сообщение.';return;}
+  const input=$('#supportInput'),text=String(input.value||'').trim(),file=supportAttachment;
+  if(!text&&!file){$('#supportStatus').textContent='Введите сообщение или прикрепите файл.';return;}
+  if(file?.type.startsWith('image/')&&!(await requireAdult('Прикрепление фото в поддержке доступно только с подтверждением 18+.'))){
+    $('#supportStatus').textContent='Отправка отменена: нужно подтвердить возраст 18+.';
+    return;
+  }
   supportSending=true;$('#supportSend').disabled=true;$('#supportStatus').textContent='';
   try{
+    const attachment=file?await prepareSupportAttachment(file):null;
     const thread=await createSupportThread();
-    await cloudRpc('sphere_support_send',{p_thread:thread.id,p_secret_hash:await hashSecret(thread.secret,'sphere-support'),p_account:currentAccount?.id||null,p_token:currentAccount?.token||null,p_body:text});
-    input.value='';
+    await cloudRpc('sphere_support_send',{p_thread:thread.id,p_secret_hash:await hashSecret(thread.secret,'sphere-support'),p_account:currentAccount?.id||null,p_token:currentAccount?.token||null,p_body:text,p_attachment:attachment});
+    input.value='';clearSupportAttachment('user');
     await loadSupportMessages(true);
     startSupportPolling();
   }catch(error){
@@ -2135,6 +2346,15 @@ $('#supportForm').onsubmit=async e=>{
     supportSending=false;$('#supportSend').disabled=false;
   }
 };
+$('#supportFile').addEventListener('change',e=>setSupportAttachment('user',e.target.files[0]||null));
+$('#adminSupportFile').addEventListener('change',e=>setSupportAttachment('admin',e.target.files[0]||null));
+[['#supportInput','#supportForm'],['#adminSupportInput','#adminSupportForm']].forEach(([inputSelector,formSelector])=>{
+  $(inputSelector).addEventListener('keydown',e=>{
+    if(e.key!=='Enter'||e.shiftKey||e.isComposing)return;
+    e.preventDefault();
+    $(formSelector).requestSubmit();
+  });
+});
 
 async function loadAdminSupportThread(id,silent=false){
   const status=$('#adminSupportStatus');if(status&&!silent)status.textContent='';
@@ -2143,6 +2363,7 @@ async function loadAdminSupportThread(id,silent=false){
     adminSupportCurrent=data?.thread||null;
     $('#adminSupportTitle').textContent=adminSupportCurrent?.name||adminSupportCurrent?.email||'Обращение';
     $('#adminSupportSub').textContent=[adminSupportCurrent?.email,adminSupportCurrent?.alias?`@${adminSupportCurrent.alias}`:''].filter(Boolean).join(' · ');
+    const hideBtn=$('#adminSupportHide');if(hideBtn)hideBtn.hidden=!adminSupportCurrent?.id;
     applyPresenceElement($('#adminSupportPresence'),adminSupportCurrent?.online,adminSupportCurrent?.lastSeen,'Пользователь в сети','Пользователь не в сети');
     const markup=supportMessagesMarkup(Array.isArray(data?.messages)?data.messages:[],'owner'),box=$('#adminSupportMessages');
     if(box&&box.innerHTML!==markup){box.innerHTML=markup;scrollSupportBox('#adminSupportMessages');}
@@ -2160,8 +2381,10 @@ function startAdminSupportPolling(){
 function stopAdminSupportPolling(){clearInterval(adminSupportPollTimer);adminSupportPollTimer=0;}
 async function openAdminSupportThread(id){
   const dialog=$('#adminSupportDialog');
+  clearSupportAttachment('admin');
   $('#adminSupportMessages').innerHTML='<div class="support-empty">Загружаем диалог…</div>';
   $('#adminSupportStatus').textContent='';
+  const hideBtn=$('#adminSupportHide');if(hideBtn)hideBtn.hidden=true;
   if(!dialog.open)dialog.showModal();
   await loadAdminSupportThread(id);
   startAdminSupportPolling();
@@ -2169,21 +2392,40 @@ async function openAdminSupportThread(id){
 const adminSupportDialog=$('#adminSupportDialog');
 $('#adminSupportClose').onclick=()=>adminSupportDialog.close();
 adminSupportDialog.addEventListener('click',e=>{if(e.target===adminSupportDialog)adminSupportDialog.close();});
-adminSupportDialog.addEventListener('close',stopAdminSupportPolling);
+adminSupportDialog.addEventListener('close',()=>{stopAdminSupportPolling();clearSupportAttachment('admin');});
 $('#adminSupportList').addEventListener('click',e=>{const row=e.target.closest('[data-support-thread]');if(row)openAdminSupportThread(row.dataset.supportThread);});
 $('#adminSupportForm').onsubmit=async e=>{
   e.preventDefault();
-  const input=$('#adminSupportInput'),text=String(input.value||'').trim();
-  if(!text)return;
+  const input=$('#adminSupportInput'),text=String(input.value||'').trim(),file=adminSupportAttachment;
+  if(!text&&!file)return;
   if(!adminSupportCurrent?.id){$('#adminSupportStatus').textContent='Сначала выберите обращение.';return;}
+  if(file?.type.startsWith('image/')&&!(await requireAdult('Прикрепление фото в поддержке доступно только с подтверждением 18+.'))){
+    $('#adminSupportStatus').textContent='Отправка отменена: нужно подтвердить возраст 18+.';
+    return;
+  }
   const btn=$('#adminSupportForm button[type="submit"]');btn.disabled=true;
   try{
-    await cloudRpc('sphere_support_reply',{p_id:currentAccount.id,p_token:currentAccount.token,p_thread:adminSupportCurrent.id,p_body:text});
-    input.value='';
+    const attachment=file?await prepareSupportAttachment(file):null;
+    await cloudRpc('sphere_support_reply',{p_id:currentAccount.id,p_token:currentAccount.token,p_thread:adminSupportCurrent.id,p_body:text,p_attachment:attachment});
+    input.value='';clearSupportAttachment('admin');
     await loadAdminSupportThread(adminSupportCurrent.id,true);
   }catch(error){
     $('#adminSupportStatus').textContent=supportErrorText(error);
   }finally{btn.disabled=false;}
+};
+$('#adminSupportHide').onclick=()=>{
+  if(!adminSupportCurrent?.id)return;
+  const threadId=adminSupportCurrent.id,name=adminSupportCurrent.name||adminSupportCurrent.email||'обращение';
+  openEditor('Удалить чат у себя',`<p>Удалить диалог с <b>${escapeHtml(name)}</b> из вашего списка?</p><p class="help-text">У пользователя чат и сообщения останутся. Если он напишет снова, обращение вернётся в список.</p>`,async()=>{
+    try{
+      await cloudRpc('sphere_support_admin_hide',{p_id:currentAccount.id,p_token:currentAccount.token,p_thread:threadId});
+    }catch(error){throw new Error(supportErrorText(error));}
+    adminSupportThreads=adminSupportThreads.filter(thread=>String(thread.id)!==String(threadId));
+    adminSupportCurrent=null;
+    adminSupportDialog.close();
+    renderAdminSupport();
+    toast('Чат удалён только у вас');
+  },'Удалить у себя');
 };
 
 let adminLogSelectedId='';
