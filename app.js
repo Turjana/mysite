@@ -602,7 +602,7 @@ function applyTheme() {
   const themeBtn = $('#themeBtn');
   if (themeBtn) {
     themeBtn.textContent = light ? '☾' : black ? '◐' : '☼';
-    themeBtn.title = `Тема: ${THEME_LABELS[theme]}. Нажми, чтобы переключить светлую/тёмную.`;
+    themeBtn.title = `Тема: ${THEME_LABELS[theme]}. Нажми, чтобы сменить тему.`;
   }
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', light ? '#eef3f9' : black ? '#000000' : '#0d1017');
   document.documentElement.style.setProperty('--blue', color);
@@ -614,30 +614,31 @@ function applyTheme() {
   const base = light
     ? {bg:'#f3f6fb',sidebar:'#eaf0f8',panel:'#ffffff',panel2:'#f5f8fc',line:'#d2dce9'}
     : black
-      ? {bg:'#000000',sidebar:'#050505',panel:'#0a0a0a',panel2:'#111111',line:'#252525'}
+      ? {bg:'#000000',sidebar:'#000000',panel:'#080808',panel2:'#0d0d0d',line:'#232323'}
       : {bg:'#0d1017',sidebar:'#11151d',panel:'#151a23',panel2:'#191f29',line:'#29303b'};
   const weights = light
     ? {bg:.12,sidebar:.18,panel:.06,panel2:.10,line:.22}
     : black
-      ? {bg:.12,sidebar:.16,panel:.11,panel2:.15,line:.28}
+      ? {bg:0,sidebar:0,panel:0,panel2:0,line:0}
       : {bg:.13,sidebar:.18,panel:.10,panel2:.13,line:.24};
   for (const key of ['bg','sidebar','panel','panel2','line']) document.documentElement.style.setProperty(`--${key}`,themeRgbCss(mixThemeColor(themeRgb(base[key]),accent,weights[key])));
   const textStyles = light
     ? {text:['#141c2a',.04],muted:['#4b596e',.14],dim:['#4f5c70',.10]}
     : black
-      ? {text:['#f7f7f7',.04],muted:['#9a9a9a',.10],dim:['#686868',.12]}
+      ? {text:['#ffffff',0],muted:['#a1a1a1',0],dim:['#6e6e6e',0]}
       : {text:['#f4f5f8',.05],muted:['#8b93a3',.12],dim:['#626b7b',.14]};
   for (const [key,[baseColor,amount]] of Object.entries(textStyles)) document.documentElement.style.setProperty(`--${key}`,themeRgbCss(mixThemeColor(themeRgb(baseColor),accent,amount)));
-  const glow = light ? .20 : black ? .34 : .26, glow2 = light ? .14 : black ? .26 : .19;
-  const ambient = light ? .22 : black ? .48 : .34;
-  document.documentElement.style.setProperty('--bg-gradient', `radial-gradient(circle at 14% 18%, ${themeTone(hsl,0,glow)} 0%, transparent 54%), radial-gradient(circle at 86% 14%, ${themeTone(hsl,54,glow2)} 0%, transparent 52%), radial-gradient(circle at 52% 92%, ${themeTone(hsl,-58,glow2)} 0%, transparent 58%)`);
+  const glow = light ? .20 : black ? 0 : .26, glow2 = light ? .14 : black ? 0 : .19;
+  const ambient = light ? .22 : black ? 0 : .34;
+  document.documentElement.style.setProperty('--bg-gradient', black ? 'none' : `radial-gradient(circle at 14% 18%, ${themeTone(hsl,0,glow)} 0%, transparent 54%), radial-gradient(circle at 86% 14%, ${themeTone(hsl,54,glow2)} 0%, transparent 52%), radial-gradient(circle at 52% 92%, ${themeTone(hsl,-58,glow2)} 0%, transparent 58%)`);
   document.documentElement.style.setProperty('--ambient-a', themeTone(hsl,0,ambient));
   document.documentElement.style.setProperty('--ambient-b', themeTone(hsl,54,ambient * .86));
   document.documentElement.style.setProperty('--ambient-c', themeTone(hsl,-58,ambient * .8));
-  document.documentElement.style.setProperty('--ambient-opacity', light ? '.28' : black ? '.62' : '.48');
+  document.documentElement.style.setProperty('--ambient-opacity', light ? '.28' : black ? '0' : '.48');
 }
 $('#themeBtn').onclick = () => {
-  state.theme = state.theme === 'light' ? 'dark' : 'light';
+  const themes=['dark','black','light'];
+  state.theme=themes[(themes.indexOf(state.theme)+1)%themes.length];
   applyTheme(); renderThemePreferences(); persist();
   logAction('переключил тему', THEME_LABELS[state.theme] || 'Тёмная');
 };
@@ -821,10 +822,36 @@ function photoAccent(photo) {
 function cabinetBackgroundValue(){
   return isOwner(currentAccount) ? String(state.profile.cabinetBg||'') : '';
 }
+function cabinetVideoValue(){
+  return isOwner(currentAccount) ? String(state.profile.cabinetBgVideo||'') : '';
+}
+let cabinetVideoURL='';
+function resetCabinetVideo(video=$('#cabinetBgVideo')){
+  if(!video)return;
+  if(cabinetVideoURL){URL.revokeObjectURL(cabinetVideoURL);cabinetVideoURL='';}
+  video.pause();video.onloadedmetadata=null;video.removeAttribute('src');delete video.dataset.mediaKey;video.load();
+}
+async function loadCabinetVideo(key){
+  const video=$('#cabinetBgVideo');if(!video||!key)return;
+  if(video.dataset.mediaKey===key&&cabinetVideoURL)return;
+  try{
+    const blob=await audioStore('get',key);
+    if(!blob||cabinetVideoValue()!==key)return;
+    if(cabinetVideoURL)URL.revokeObjectURL(cabinetVideoURL);
+    cabinetVideoURL=URL.createObjectURL(blob);video.dataset.mediaKey=key;video.src=cabinetVideoURL;
+    video.onloadedmetadata=()=>{video.currentTime=0;if(document.body.classList.contains('profile-cabinet-video'))video.play().catch(()=>{});};
+  }catch{}
+}
 function applyCabinetBackground(){
-  const value=cabinetBackgroundValue();
+  const value=cabinetBackgroundValue(),videoValue=cabinetVideoValue();
+  const active=activeView==='profile'&&!document.body.classList.contains('auth-locked');
   document.documentElement.style.setProperty('--cabinet-bg',value?`url("${value}")`:'none');
-  document.body.classList.toggle('profile-cabinet-bg',!!value&&activeView==='profile'&&!document.body.classList.contains('auth-locked'));
+  document.body.classList.toggle('profile-cabinet-bg',!!value&&active);
+  document.body.classList.toggle('profile-cabinet-video',!!videoValue&&active);
+  const video=$('#cabinetBgVideo');
+  if(!videoValue){resetCabinetVideo(video);return;}
+  loadCabinetVideo(videoValue);
+  if(video){if(active)video.play().catch(()=>{});else video.pause();}
 }
 function renderProfile() {
   $$('.avatar,.profile-avatar').forEach(el=>el.innerHTML=avatarMarkup());
@@ -840,7 +867,7 @@ function renderProfile() {
   const prefix=$('#profileOwner');
   if(prefix){prefix.hidden=!owner;prefix.textContent=state.profile.status||'✦ В своём ритме';}
   const cabinetBtn=$('#profileCabinetBgBtn');
-  if(cabinetBtn){cabinetBtn.hidden=!owner;cabinetBtn.classList.toggle('has-bg',!!cabinetBackgroundValue());}
+  if(cabinetBtn){cabinetBtn.hidden=!owner;cabinetBtn.classList.toggle('has-bg',!!(cabinetBackgroundValue()||cabinetVideoValue()));}
   applyCabinetBackground();
   $('#profileAliasLine').textContent=`@${state.profile.alias||'без_псевдонима'}`;
   $$('.profile-status').forEach(el=>el.remove());
@@ -1228,14 +1255,29 @@ function editProfile() {
 }
 function editCabinetBackground(){
   if(!isOwner(currentAccount)){toast('Фон личного кабинета может менять только владелец.',true);return;}
-  const hasBg=!!cabinetBackgroundValue();
-  openEditor('Фон личного кабинета',`<p class="help-text">Это фон всей страницы личного кабинета, а не область рядом с аватаркой. Изображение видно только владельцу.</p>${field('Новое изображение',input('bg','','file','accept="image/*"'))}${hasBg?'<label class="checkbox-label"><input type="checkbox" name="removeBg"> Удалить текущий фон</label>':''}`,async data=>{
+  const currentImage=cabinetBackgroundValue(),currentVideo=cabinetVideoValue(),hasBg=!!(currentImage||currentVideo);
+  openEditor('Фон личного кабинета',`<p class="help-text">Это фон всей страницы личного кабинета, а не область рядом с аватаркой. Можно загрузить фото или видео до минуты (до 80 МБ).</p>${field('Фото или видео',input('bg','','file','accept="image/*,video/*"'))}${hasBg?'<label class="checkbox-label"><input type="checkbox" name="removeBg"> Удалить текущий фон</label>':''}`,async data=>{
     const file=data.get('bg');
-    let value=data.has('removeBg')?'':cabinetBackgroundValue();
-    if(file?.size)value=await imageData(file,1920,.84);
-    if(value)state.profile.cabinetBg=value;else delete state.profile.cabinetBg;
-    logAction(value?'изменил фон личного кабинета':'убрал фон личного кабинета','');
-    saveAndRender();applyCabinetBackground();toast(value?'Фон личного кабинета сохранён':'Фон личного кабинета удалён');
+    let image=data.has('removeBg')?'':currentImage;
+    let videoKey=data.has('removeBg')?'':currentVideo;
+    if(file?.size){
+      if(file.type.startsWith('image/')){
+        image=await imageData(file,1920,.84);
+        videoKey='';
+      }else if(file.type.startsWith('video/')){
+        const info=await videoData(file);
+        videoKey=info.key;
+        image='';
+      }else{
+        throw new Error('Выберите фото или видео.');
+      }
+    }
+    if(currentVideo&&currentVideo!==videoKey)audioStore('delete',currentVideo).catch(()=>{});
+    if(image)state.profile.cabinetBg=image;else delete state.profile.cabinetBg;
+    if(videoKey)state.profile.cabinetBgVideo=videoKey;else delete state.profile.cabinetBgVideo;
+    logAction(videoKey?'установил видео-фон личного кабинета':image?'изменил фон личного кабинета':'убрал фон личного кабинета','');
+    saveAndRender();applyCabinetBackground();
+    toast(videoKey?'Видео-фон личного кабинета сохранён':image?'Фон личного кабинета сохранён':'Фон личного кабинета удалён');
   },'Сохранить');
 }
 $$('[data-profile-tool="edit"]').forEach(b=>b.onclick=editProfile);
@@ -1423,7 +1465,21 @@ function stopAura(){
   const meta=$('#musicMeta');if(meta)meta.textContent='';
 }
 function coverMarkup(track,cls='track-cover') {return track?.cover?`<img class="${cls}" src="${escapeHtml(track.cover)}" alt="Обложка ${escapeHtml(track.title)}">`:`<span class="${cls} no-cover" title="Обложка не добавлена">♪</span>`;}
+function updateNowPlayingLike(){
+  const btn=$('#nowPlayingLike');if(!btn)return;
+  const track=state.tracks.find(t=>t.id===currentTrack);
+  btn.hidden=!track;
+  if(!track)return;
+  btn.dataset.id=track.id;
+  btn.classList.toggle('liked',!!track.favorite);
+  btn.textContent=track.favorite?'♥':'♡';
+  const label=track.favorite?'Убрать из любимых':'Добавить в любимые';
+  btn.setAttribute('aria-label',label);
+  btn.setAttribute('aria-pressed',String(!!track.favorite));
+  btn.title=label;
+}
 function renderMusic() {
+  updateNowPlayingLike();
   $('#musicHero').classList.toggle('empty-player', !currentTrack);
   $('#playlistGrid').innerHTML=state.playlists.length?state.playlists.map(p=>`<article class="playlist-card ${p.id===selectedPlaylist?'selected':''}"><strong>${escapeHtml(p.name)}</strong><small>${state.tracks.filter(t=>t.playlist===p.id).length} треков</small><div class="tool-controls">${button('playlist-open',p.id,'Открыть','text-btn')}${button('track-add',p.id,'+ Трек','text-btn')}${button('playlist-edit',p.id,'✎','row-btn')}${button('playlist-delete',p.id,'×','row-btn')}</div></article>`).join(''):'';
   let list=selectedPlaylist==='favorites'?state.tracks.filter(t=>t.favorite):state.tracks.filter(t=>!selectedPlaylist||t.playlist===selectedPlaylist);
@@ -1432,7 +1488,7 @@ function renderMusic() {
   list=[...list].sort((a,b)=>b.created-a.created);
   const playlist=state.playlists.find(p=>p.id===selectedPlaylist);
   $('#trackCount').textContent=`${list.length} треков`;
-  $('#trackList').innerHTML=(selectedPlaylist?`<div class="manage-row"><strong>${escapeHtml(selectedPlaylist==='favorites'?'Любимые треки':playlist?.name||'')}</strong>${button('playlist-all','','Все плейлисты','text-btn')}</div>`:'')+(list.length?list.map(t=>`<div class="track-row">${coverMarkup(t)}<div class="track-info"><div class="task-copy"><strong>${escapeHtml(t.title)}</strong><small>${escapeHtml(t.artist||'Исполнитель не указан')}${t.service?` · ${escapeHtml(t.service)}`:''}</small></div><div class="track-controls"><button class="heart-btn ${t.favorite?'liked':''}" data-action="track-favorite" data-id="${t.id}" aria-label="${t.favorite?'Убрать из любимых':'Добавить в любимые'}">${t.favorite?'♥':'♡'}</button><select class="hit-select" data-track="${t.id}" aria-label="Категория ${escapeHtml(t.title)}">${Object.entries(hits).map(([key,label])=>`<option value="${key}" ${key===t.hit?'selected':''}>${label}</option>`).join('')}</select>${button('track-play',t.id,currentTrack===t.id&&(embedPlaying||!audio.paused)?'Ⅱ':'▶','row-btn')}${t.sourceUrl?`<a class="row-btn track-source" href="${escapeHtml(t.sourceUrl)}" target="_blank" rel="noopener noreferrer" title="Открыть источник">↗</a>`:''}${button('track-edit',t.id,'✎','row-btn')}${button('track-delete',t.id,'×','row-btn')}</div></div></div>`).join(''):(selectedPlaylist==='favorites'?empty('Ты пока не отметил ни одного трека сердечком.'):''));
+  $('#trackList').innerHTML=(selectedPlaylist?`<div class="manage-row"><strong>${escapeHtml(selectedPlaylist==='favorites'?'Любимые треки':playlist?.name||'')}</strong>${button('playlist-all','','Все плейлисты','text-btn')}</div>`:'')+(list.length?list.map(t=>`<div class="track-row" data-track-row="${t.id}">${coverMarkup(t)}<div class="track-info"><div class="task-copy"><strong>${escapeHtml(t.title)}</strong><small>${escapeHtml(t.artist||'Исполнитель не указан')}${t.service?` · ${escapeHtml(t.service)}`:''}</small></div><div class="track-controls"><select class="hit-select" data-track="${t.id}" aria-label="Категория ${escapeHtml(t.title)}">${Object.entries(hits).map(([key,label])=>`<option value="${key}" ${key===t.hit?'selected':''}>${label}</option>`).join('')}</select>${button('track-play',t.id,currentTrack===t.id&&(embedPlaying||!audio.paused)?'Ⅱ':'▶','row-btn')}${t.sourceUrl?`<a class="row-btn track-source" href="${escapeHtml(t.sourceUrl)}" target="_blank" rel="noopener noreferrer" title="Открыть источник">↗</a>`:''}${button('track-edit',t.id,'✎','row-btn')}${button('track-delete',t.id,'×','row-btn')}</div></div></div>`).join(''):(selectedPlaylist==='favorites'?empty('Ты пока не отметил ни одного трека сердечком.'):''));
 }
 function playlistEditor(id) {
   const playlist=state.playlists.find(p=>p.id===id);
@@ -1532,7 +1588,7 @@ async function playTrack(id) {
       if(!blob){if(track.sourceUrl){toast('Прямой аудиопоток недоступен. Открой источник по ссылке ↗',true);return;}throw new Error('Аудиофайл не найден. Добавь его повторно.');}
       src=URL.createObjectURL(blob);fromBlob=true;
     }
-    audio.pause();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=fromBlob?src:'';audio.src=src;currentTrack=id;embedPlaying=false;updateVolumeUI();$('#musicProgressBar')?.classList.remove('disabled');
+    audio.pause();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=fromBlob?src:'';audio.src=src;currentTrack=id;embedPlaying=false;updateVolumeUI();updateNowPlayingLike();$('#musicProgressBar')?.classList.remove('disabled');
     $('#nowPlayingTitle').textContent=track.title;$('#nowPlayingArtist').textContent=track.artist||'Исполнитель не указан';$('.album-art').innerHTML=coverMarkup(track,'playing-cover');$('#musicHero').classList.remove('empty-player','embed-playing');await audio.play();startAura(track);
   }catch(error){stopAura();toast(error.message||'Не удалось воспроизвести трек.',true);}
 }
@@ -1651,8 +1707,9 @@ function adminAvatarMarkup(account,extraClass=''){
   return `<span class="${cls} has-photo"><img src="${escapeHtml(photo)}" alt="Аватар ${escapeHtml(account?.name||account?.alias||'')}" style="object-position:${x}% ${y}%;transform:scale(${scale})"></span>`;
 }
 function updateAdminAccess(){
-  const owner=isOwner(currentAccount),nav=$('#adminNav');
+  const owner=isOwner(currentAccount),nav=$('#adminNav'),supportNav=$('#supportNav');
   if(nav)nav.hidden=!owner;
+  if(supportNav)supportNav.hidden=owner;
   if(!owner&&activeView==='admin')showView('overview');
   if(owner&&!adminSeenAt)saveAdminSeen();
   updateAdminAlert();
@@ -2240,7 +2297,7 @@ function renderSupportAttachmentChip(kind){
   if(!file){chip.hidden=true;chip.innerHTML='';return;}
   const icon=file.type.startsWith('image/')?'🖼':file.type.startsWith('audio/')?'♫':'📎';
   chip.hidden=false;
-  chip.innerHTML=`<span class="support-file-icon">${icon}</span><span class="support-file-copy"><strong>${escapeHtml(file.name||'Файл')}</strong><small>${humanFileSize(file.size)}${file.type.startsWith('image/')?' · нужно подтверждение 18+':''}</small></span><button type="button" class="support-file-remove" aria-label="Убрать файл">×</button>`;
+  chip.innerHTML=`<span class="support-file-icon">${icon}</span><span class="support-file-copy"><strong>${escapeHtml(file.name||'Файл')}</strong><small>${humanFileSize(file.size)}</small></span><button type="button" class="support-file-remove" aria-label="Убрать файл">×</button>`;
   $('.support-file-remove',chip).onclick=()=>clearSupportAttachment(kind);
 }
 function setSupportAttachment(kind,file){
@@ -2324,10 +2381,6 @@ $('#supportForm').onsubmit=async e=>{
   if(supportSending)return;
   const input=$('#supportInput'),text=String(input.value||'').trim(),file=supportAttachment;
   if(!text&&!file){$('#supportStatus').textContent='Введите сообщение или прикрепите файл.';return;}
-  if(file?.type.startsWith('image/')&&!(await requireAdult('Прикрепление фото в поддержке доступно только с подтверждением 18+.'))){
-    $('#supportStatus').textContent='Отправка отменена: нужно подтвердить возраст 18+.';
-    return;
-  }
   supportSending=true;$('#supportSend').disabled=true;$('#supportStatus').textContent='';
   try{
     const attachment=file?await prepareSupportAttachment(file):null;
@@ -2399,10 +2452,6 @@ $('#adminSupportForm').onsubmit=async e=>{
   const input=$('#adminSupportInput'),text=String(input.value||'').trim(),file=adminSupportAttachment;
   if(!text&&!file)return;
   if(!adminSupportCurrent?.id){$('#adminSupportStatus').textContent='Сначала выберите обращение.';return;}
-  if(file?.type.startsWith('image/')&&!(await requireAdult('Прикрепление фото в поддержке доступно только с подтверждением 18+.'))){
-    $('#adminSupportStatus').textContent='Отправка отменена: нужно подтвердить возраст 18+.';
-    return;
-  }
   const btn=$('#adminSupportForm button[type="submit"]');btn.disabled=true;
   try{
     const attachment=file?await prepareSupportAttachment(file):null;
@@ -2480,7 +2529,7 @@ function showSourceGuard(){
     guard=document.createElement('div');
     guard.id='sourceGuard';
     guard.className='source-guard';
-    guard.innerHTML=`<div class="source-guard-card"><div class="source-guard-emoji">🕵️‍♂️</div><p class="eyebrow">ТУТ ЖИВЁТ МАГИЯ</p><h1>Ой, посмотреть исходный код не получится</h1><p>Код спрятан надёжнее, чем последняя печенька 🍪. Закройте инструменты разработчика и возвращайтесь — в Сфере ещё столько всего интересного.</p><button type="button" class="primary-btn" data-source-return>Вернуться в Сферу</button><small>Подсказка: разработчики тоже люди, но этот код — под замком 🔐</small></div>`;
+    guard.innerHTML=`<div class="source-guard-card"><div class="source-guard-emoji">🕵️‍♂️</div><p class="eyebrow">ТУТ ЖИВЁТ МАГИЯ</p><h1>Ой, посмотреть исходный код не получится</h1><button type="button" class="primary-btn" data-source-return>Вернуться в Сферу</button></div>`;
     document.body.append(guard);
     guard.addEventListener('click',event=>{
       if(event.target.closest('[data-source-return]'))location.reload();
@@ -2490,34 +2539,12 @@ function showSourceGuard(){
   document.documentElement.classList.add('source-guard-open');
   requestAnimationFrame(()=>guard.classList.add('visible'));
 }
-function hasFinePointer(){try{return window.matchMedia('(pointer:fine)').matches;}catch{return true;}}
 document.addEventListener('keydown',event=>{
-  if(sourceGuardExempt())return;
-  const key=String(event.key||'').toLowerCase();
-  const devtools=(event.key==='F12')||((event.ctrlKey||event.metaKey)&&event.shiftKey&&['i','j','c'].includes(key));
-  const viewSource=(event.ctrlKey||event.metaKey)&&key==='u';
-  if(devtools||viewSource){
-    event.preventDefault();
-    event.stopPropagation();
-    showSourceGuard();
-  }
-},true);
-document.addEventListener('contextmenu',event=>{
-  if(!hasFinePointer()||sourceGuardExempt())return;
-  if(event.target.closest('input,textarea,select,[contenteditable="true"]'))return;
+  if(sourceGuardExempt()||event.key!=='F12')return;
   event.preventDefault();
+  event.stopPropagation();
   showSourceGuard();
 },true);
-// Ловушка для открытых DevTools: при открытой панели браузер останавливается
-// на debugger и возвращается заметно позже обычного кадра. На телефонах,
-// где панели разработчика нет, такая проверка ничего не ломает.
-setInterval(()=>{
-  if(sourceGuardExempt()||document.hidden||document.querySelector('#sourceGuard:not([hidden])'))return;
-  const started=performance.now();
-  // eslint-disable-next-line no-debugger
-  debugger;
-  if(performance.now()-started>1200)showSourceGuard();
-},1500);
 
 function stopCurrentTrack(){playGeneration++;embedPlaying=false;audio.pause();audio.removeAttribute('src');audio.load();currentTrack='';if(objectURL)URL.revokeObjectURL(objectURL);objectURL='';stopAura();updateVolumeUI();$('#nowPlayingTitle').textContent='Нет активного трека';$('#nowPlayingArtist').textContent='';$('.album-art').innerHTML='<span>♪</span>';$('#playBtn').textContent='▶';$('#musicHero').classList.add('empty-player');$('#musicHero').classList.remove('embed-playing','aura-on');$('#musicProgressBar')?.classList.remove('disabled','seeking');musicProgressUpdate();renderMusic();}
 document.addEventListener('click',async e=>{
@@ -2550,6 +2577,11 @@ document.addEventListener('click',async e=>{
     if(action==='admin-warn')adminWarnDialog(id);
     if(action==='admin-delete')adminDeleteProfile(id);
   }catch(error){toast(error.message,true);}
+});
+document.addEventListener('click',async e=>{
+  const row=e.target.closest('[data-track-row]');
+  if(!row||e.target.closest('button,a,select,input,textarea,label'))return;
+  await playTrack(row.dataset.trackRow);
 });
 function renderAll(){renderTasks();renderCalendar();renderGoals();renderProfile();renderHabits();renderMusic();renderNews();renderSettings();updateSettingsCity();updateAdminAccess();if(activeView==='admin')renderAdmin();}
 function saveAndRender(){persist();renderAll();}
