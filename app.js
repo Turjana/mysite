@@ -129,6 +129,8 @@ function unreadWarnings(accountId) {
 // --- Облако Supabase -------------------------------------------------------
 const cloudErrorMessages = {
   invalid_credentials: 'Неверный пароль.',
+  invalid_password: 'Неверный текущий пароль.',
+  invalid_hash: 'Ошибка подготовки пароля. Обновите страницу и попробуйте снова.',
   account_not_found: 'Аккаунт с таким email не найден.',
   invalid_recovery: 'Неверный код восстановления.',
   email_taken: 'Аккаунт с таким email уже существует.',
@@ -144,6 +146,13 @@ const cloudErrorMessages = {
 function cloudErrorText(raw) {
   const key = String(raw || '').trim().toLowerCase();
   return cloudErrorMessages[key] || (key.includes('failed to fetch') ? 'Нет связи с облаком. Проверьте интернет.' : String(raw || 'Ошибка облака.'));
+}
+function explainMissingCloudFunction(error) {
+  const message = String(error?.message || '');
+  if (message.includes('Could not find the function') || message.includes('function public.')) {
+    return new Error('Эта функция ещё не установлена в Supabase. Выполните обновлённый supabase-schema.sql в SQL Editor.');
+  }
+  return error;
 }
 async function cloudRpc(name, payload = {}) {
   if (!CLOUD_ENABLED) throw new Error('Облако не настроено.');
@@ -1061,8 +1070,22 @@ function editProfile() {
   const photoBlock='<div class="photo-editor"><div class="photo-crop" id="photoCrop"><img id="photoCropImage" alt="Область аватара"><span class="photo-crop-hint" id="photoCropHint">Перетащи фото, чтобы выбрать область</span></div><label class="photo-zoom">Масштаб<input type="range" id="photoScale" min="1" max="2.5" step="0.01" value="'+scale+'"></label><p class="help-text">Перетаскивай фотографию внутри круга и меняй масштаб — так она будет обрезана для аватара.</p></div>';
   const ownerAccount=isOwner(currentAccount);
   const ownerStatusField=ownerAccount?field('Статус (префикс)',input('status',state.profile.status||'✦ В своём ритме','text','maxlength="60"')):'';
-  openEditor('Изменить профиль',ownerStatusField+field('Имя',input('name',state.profile.name,'text','required maxlength="80" autocomplete="name"'))+field('Псевдоним',input('alias',state.profile.alias,'text','maxlength="40"'))+field('Фотография',input('photo','','file','accept="image/*"'))+photoBlock+field('Видео-фон',input('video','','file','accept="video/*"'))+`<p class="help-text" id="videoDurationHint">${durationHint} Видео будет проигрываться целиком, без обрезки.</p>`+'<div class="video-preview" id="videoPreviewWrap" hidden><video id="profileVideoPreview" muted playsinline controls></video></div>'+'<label class="checkbox-label"><input type="checkbox" name="removePhoto"> Удалить фото</label><label class="checkbox-label"><input type="checkbox" name="removeVideo"> Удалить видео</label>',async data=>{
+  openEditor('Изменить профиль',ownerStatusField+field('Имя',input('name',state.profile.name,'text','required maxlength="80" autocomplete="name"'))+field('Псевдоним',input('alias',state.profile.alias,'text','required maxlength="32"'))+field('Фотография',input('photo','','file','accept="image/*"'))+photoBlock+field('Видео-фон',input('video','','file','accept="video/*"'))+`<p class="help-text" id="videoDurationHint">${durationHint} Видео будет проигрываться целиком, без обрезки.</p>`+'<div class="video-preview" id="videoPreviewWrap" hidden><video id="profileVideoPreview" muted playsinline controls></video></div>'+'<label class="checkbox-label"><input type="checkbox" name="removePhoto"> Удалить фото</label><label class="checkbox-label"><input type="checkbox" name="removeVideo"> Удалить видео</label>',async data=>{
     const name=String(data.get('name')).trim();if(!name)throw new Error('Введите имя.');
+    const newAlias=String(data.get('alias')).trim().replace(/^@/,'');
+    if(!newAlias)throw new Error('Введите псевдоним.');
+    if(CLOUD_ENABLED&&currentAccount&&(normalizeAlias(newAlias)!==normalizeAlias(currentAccount.alias)||name!==currentAccount.name)){
+      try{
+        const updated=await cloudRpc('sphere_account_update',{p_id:currentAccount.id,p_token:currentAccount.token,p_name:name,p_alias:newAlias});
+        currentAccount.name=updated.name||name;
+        currentAccount.alias=updated.alias||normalizeAlias(newAlias);
+        cacheCloudAccount(currentAccount);
+      }catch(error){
+        if(String(error.code||'').toLowerCase()==='alias_taken')throw new Error('Такой псевдоним уже занят. Выбери другой.');
+        if(String(error.code||'').toLowerCase()==='alias_invalid')throw new Error('Псевдоним должен быть от 3 до 32 символов без пробелов.');
+        throw error;
+      }
+    }
     const newPhoto=await imageData(data.get('photo'));
     const removePhoto=data.has('removePhoto');
     const photo=removePhoto&&!newPhoto?'':(newPhoto||state.profile.photo);
@@ -1072,7 +1095,7 @@ function editProfile() {
     else if(videoFile?.size){const info=await videoData(videoFile);video=info.key;videoDuration=info.duration;}
     const previousVideo=state.profile.video;
     const newStatus=ownerAccount?(String(data.get('status')).trim()||'✦ В своём ритме'):state.profile.status;
-    state.profile={...state.profile,name,alias:String(data.get('alias')).trim().replace(/^@/,''),status:newStatus,photo,photoX:photo?cropState.x:50,photoY:photo?cropState.y:50,photoScale:photo?cropState.scale:1,video,videoStart:0,videoEnd:0,videoDuration:video?videoDuration:0};
+    state.profile={...state.profile,name,alias:newAlias,status:newStatus,photo,photoX:photo?cropState.x:50,photoY:photo?cropState.y:50,photoScale:photo?cropState.scale:1,video,videoStart:0,videoEnd:0,videoDuration:video?videoDuration:0};
     if(previousVideo&&previousVideo!==video)audioStore('delete',previousVideo).catch(()=>{});
     logAction('обновил профиль',name);
     saveAndRender();toast('Профиль сохранён');
@@ -1421,10 +1444,12 @@ $('#musicSort').onclick=()=>{const modes=['new','day','week','month','year'];mus
 document.addEventListener('change',e=>{if(e.target.matches('.hit-select')){const track=state.tracks.find(t=>t.id===e.target.dataset.track);if(track){track.hit=e.target.value;persist();renderMusic();}}});
 
 // Settings only expose actions that have a real local implementation.
-$('.preferences').innerHTML=`<div class="preference-row" id="accountPreference"></div><div class="preference-row"><div><strong>Утренний план</strong><span>Показывать напоминание при открытии после 08:00</span></div><button class="toggle" data-setting="morning" aria-label="Утренний план"><i></i></button></div><div class="preference-row"><div><strong>Звук выполнения</strong><span>Короткий сигнал при завершении задачи</span></div><button class="toggle" data-setting="sound" aria-label="Звук выполнения"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать колокольчик напоминаний</span></div><button class="toggle" data-setting="focus" aria-label="Фокус-режим"><i></i></button></div><div class="preference-row"><div><strong>Хранение данных</strong><span>${CLOUD_ENABLED?'Синхронизируется с облаком Supabase. Аудио и видео — в этом браузере.':'Автоматически в этом браузере. Аудио и видео — в IndexedDB.'}</span></div>${button('export','','Экспорт данных')}</div>`;
+$('.preferences').innerHTML=`<div class="preference-row" id="accountPreference"></div><div class="preference-row"><div><strong>Утренний план</strong><span>Показывать напоминание при открытии после 08:00</span></div><button class="toggle" data-setting="morning" aria-label="Утренний план"><i></i></button></div><div class="preference-row"><div><strong>Звук выполнения</strong><span>Короткий сигнал при завершении задачи</span></div><button class="toggle" data-setting="sound" aria-label="Звук выполнения"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать колокольчик напоминаний</span></div><button class="toggle" data-setting="focus" aria-label="Фокус-режим"><i></i></button></div><div id="securityPreferences"></div><div class="preference-row"><div><strong>Хранение данных</strong><span>${CLOUD_ENABLED?'Синхронизируется с облаком Supabase. Аудио и видео — в этом браузере.':'Автоматически в этом браузере. Аудио и видео — в IndexedDB.'}</span></div>${button('export','','Экспорт данных')}</div>`;
 function renderSettings(){
   $$('[data-setting]').forEach(el=>{el.classList.toggle('on',state.settings[el.dataset.setting]);el.setAttribute('aria-pressed',String(state.settings[el.dataset.setting]));});
   $('#notificationsBtn').hidden=state.settings.focus;
+  const security=$('#securityPreferences');
+  if(security)security.innerHTML=cloudSessionActive()?`<div class="preference-row"><div><strong>Пароль</strong><span>Сменить пароль от аккаунта</span></div><button class="secondary-btn" data-action="change-password">Сменить</button></div><div class="preference-row"><div><strong>Код восстановления</strong><span>Постоянный код, который вы задаёте сами</span></div><button class="secondary-btn" data-action="set-recovery">Задать</button></div>`:'';
   const account=$('#accountPreference');
   if(account)account.innerHTML=currentAccount?`<div><strong>Аккаунт</strong><span>${escapeHtml(currentAccount.email)} · @${escapeHtml(currentAccount.alias)}</span></div><button class="secondary-btn" data-action="logout">Выйти</button>`:'';
 }
@@ -1651,6 +1676,8 @@ document.addEventListener('click',async e=>{
     if(action==='track-delete'){const t=state.tracks.find(t=>t.id===id);if(t)confirmDelete(t.title,()=>{if(currentTrack===id)stopCurrentTrack();state.tracks=state.tracks.filter(t=>t.id!==id);audioStore('delete',id).catch(()=>toast('Не удалось очистить аудиофайл.',true));logAction('удалил трек',`«${t.title}»`,id);});}
     if(action==='export'){const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`sphere-${today()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);logAction('экспортировал данные','JSON-копия профиля');toast('Данные экспортированы. Аудио и видео в JSON не входят.');}
     if(action==='logout')logoutAccount();
+    if(action==='change-password')changePasswordDialog();
+    if(action==='set-recovery')setRecoveryDialog();
     if(action==='admin-profile')adminProfileDialog(id);
     if(action==='admin-warn')adminWarnDialog(id);
     if(action==='admin-delete')adminDeleteProfile(id);
@@ -1690,7 +1717,7 @@ function showAuth(tab = 'login') {
   $('#authTabs').hidden=isRecovery;
   $$('[data-auth-tab]').forEach(button=>button.classList.toggle('active',button.dataset.authTab===tab));
   $('#authTitle').textContent=isRecovery?'Восстановление доступа':tab==='register'?'Создай свой аккаунт':'Вход в Сферу';
-  $('#authSub').textContent=isRecovery?'Восстановление работает по email и коду, который был выдан при регистрации.':CLOUD_ENABLED?'Данные сохраняются в облаке и доступны с любого устройства.':'Данные сохраняются в этом браузере и привязаны к твоему аккаунту.';
+  $('#authSub').textContent=isRecovery?'Восстановление работает по email и коду: одноразовому с регистрации или постоянному, который задан в настройках.':CLOUD_ENABLED?'Данные сохраняются в облаке и доступны с любого устройства.':'Данные сохраняются в этом браузере и привязаны к твоему аккаунту.';
   if(tab==='register'&&firstAccountSeed?.profile){
     const name=$('#registerForm [name="name"]'),alias=$('#registerForm [name="alias"]');
     if(name&&!name.value&&firstAccountSeed.profile.name)name.value=firstAccountSeed.profile.name;
@@ -1752,7 +1779,43 @@ async function logoutAccount() {
   location.reload();
 }
 function showRecoveryCode(code, title='Аккаунт создан') {
-  openEditor(title,`<p class="help-text">Этот код нужен, если ты забудешь пароль. Он показывается один раз — сохрани его в надёжном месте.</p><div class="recovery-code">${escapeHtml(code)}</div><p class="help-text">Войти можно по email или псевдониму. Восстановление — по email и этому коду.</p>`);
+  openEditor(title,`<p class="help-text">Этот код нужен, если ты забудешь пароль. Он показывается один раз — сохрани его в надёжном месте.</p><div class="recovery-code">${escapeHtml(code)}</div><p class="help-text">Войти можно по email или псевдониму. Восстановление — по email и этому коду. Позже в настройках можно заменить его на постоянный код.</p>`);
+}
+function changePasswordDialog(){
+  if(!cloudSessionActive())return;
+  openEditor('Сменить пароль',`<p class="help-text">Пароль хранится только в виде необратимого хеша. После смены старый пароль перестанет работать, а код восстановления останется прежним.</p>${field('Текущий пароль',input('current','','password','required autocomplete="current-password"'))}${field('Новый пароль',input('next','','password','required minlength="6" autocomplete="new-password"'))}${field('Повторите новый пароль',input('next2','','password','required minlength="6" autocomplete="new-password"'))}`,async data=>{
+    const current=String(data.get('current')||''),next=String(data.get('next')||''),next2=String(data.get('next2')||'');
+    if(!current)throw new Error('Введите текущий пароль.');
+    if(next.length<6)throw new Error('Новый пароль должен быть не короче 6 символов.');
+    if(next!==next2)throw new Error('Новые пароли не совпадают.');
+    const currentHash=await hashSecret(current,currentAccount.salt);
+    const newHash=await hashSecret(next,currentAccount.salt);
+    try{
+      await cloudRpc('sphere_password_change',{p_id:currentAccount.id,p_token:currentAccount.token,p_current_hash:currentHash,p_new_hash:newHash});
+    }catch(error){throw explainMissingCloudFunction(error);}
+    currentAccount.passHash=newHash;
+    cacheCloudAccount(currentAccount);
+    logAction('сменил пароль','');
+    toast('Пароль изменён');
+  },'Сохранить');
+}
+function setRecoveryDialog(){
+  if(!cloudSessionActive())return;
+  openEditor('Постоянный код восстановления',`<p class="help-text">Придумайте код, который будете использовать для восстановления пароля. Он заменит одноразовый код с регистрации и будет действовать после восстановления. Минимум 10 символов: буквы и цифры. Запишите его в надёжном месте.</p>${field('Текущий пароль',input('current','','password','required autocomplete="current-password"'))}${field('Новый код',input('code','','text','required minlength="10" maxlength="32" autocomplete="off" placeholder="Например: MYSECRET2026"'))}${field('Повторите код',input('code2','','text','required minlength="10" maxlength="32" autocomplete="off"'))}`,async data=>{
+    const current=String(data.get('current')||''),code=normalizeRecovery(data.get('code')),code2=normalizeRecovery(data.get('code2'));
+    if(!current)throw new Error('Введите текущий пароль.');
+    if(code.length<10)throw new Error('Код должен быть не короче 10 символов.');
+    if(code!==code2)throw new Error('Коды не совпадают.');
+    const currentHash=await hashSecret(current,currentAccount.salt);
+    const recoveryHash=await hashSecret(code,currentAccount.salt);
+    try{
+      await cloudRpc('sphere_recovery_set',{p_id:currentAccount.id,p_token:currentAccount.token,p_current_hash:currentHash,p_recovery_hash:recoveryHash});
+    }catch(error){throw explainMissingCloudFunction(error);}
+    currentAccount.recoveryHash=recoveryHash;
+    cacheCloudAccount(currentAccount);
+    logAction('задал постоянный код восстановления','');
+    toast('Постоянный код восстановления сохранён');
+  },'Сохранить');
 }
 $$('[data-auth-tab]').forEach(button=>button.onclick=()=>showAuth(button.dataset.authTab));
 $('#loginForm').onsubmit=async e=>{
@@ -1767,11 +1830,26 @@ $('#loginForm').onsubmit=async e=>{
         if(!salt){
           const local=findLocalAccount(login);
           if(local){
-            const localHash=await hashSecret(password,local.salt);
-            if(localHash!==local.passHash)throw new Error('Неверный пароль.');
-            account=await migrateLocalAccount(local);
+            // Псевдоним мог измениться в профиле. Если в облаке уже есть аккаунт
+            // с email из локальной копии, пробуем войти по email, а не создавать дубль.
+            const emailSalt=await cloudRpc('sphere_salt',{p_identifier:local.email});
+            if(emailSalt){
+              const emailHash=await hashSecret(password,emailSalt);
+              try{
+                const result=await cloudRpc('sphere_login',{p_identifier:local.email,p_hash:emailHash});
+                account={id:result.id,name:result.name,alias:result.alias,email:result.email,salt:emailSalt,passHash:emailHash,created:+result.created||Date.now(),token:result.token};
+                cacheCloudAccount(account);
+              }catch(loginError){
+                if(String(loginError.code||'').toLowerCase()==='invalid_credentials')throw new Error('Неверный пароль. Если не помнишь его, восстанови доступ по коду или сбрось пароль.');
+                throw loginError;
+              }
+            }else{
+              const localHash=await hashSecret(password,local.salt);
+              if(localHash!==local.passHash)throw new Error('Неверный пароль.');
+              account=await migrateLocalAccount(local);
+            }
           }
-          if(!account)throw new Error('Аккаунт не найден. Проверь email или псевдоним.');
+          if(!account)throw new Error('Аккаунт не найден. Проверь email или псевдоним. Если псевдоним менялся, войди по email.');
         }else{
           const hash=await hashSecret(password,salt);
           const result=await cloudRpc('sphere_login',{p_identifier:login,p_hash:hash});
@@ -1795,7 +1873,7 @@ $('#loginForm').onsubmit=async e=>{
       return;
     }
     const account=findLocalAccount(login);
-    if(!account)throw new Error('Аккаунт не найден. Проверь email или псевдоним.');
+    if(!account)throw new Error('Аккаунт не найден. Проверь email или псевдоним. Если псевдоним менялся, войди по email.');
     const hash=await hashSecret(password,account.salt);
     if(hash!==account.passHash)throw new Error('Неверный пароль.');
     await startSession(account);logAction('вошёл в аккаунт',account.email,account.id);
@@ -1850,26 +1928,26 @@ $('#recoveryForm').onsubmit=async e=>{
     if(CLOUD_ENABLED){
       const salt=await cloudRpc('sphere_salt',{p_identifier:email});
       if(!salt)throw new Error('Аккаунт с таким email не найден.');
-      const recoveryHash=await hashSecret(code,salt),recoveryCode=randomRecoveryCode();
+      const recoveryHash=await hashSecret(code,salt);
       const passHash=await hashSecret(password,salt);
-      const newRecoveryHash=await hashSecret(normalizeRecovery(recoveryCode),salt);
-      const result=await cloudRpc('sphere_recover',{p_email:email,p_recovery_hash:recoveryHash,p_hash:passHash,p_new_recovery_hash:newRecoveryHash});
-      const account={id:result.id,name:result.name,alias:result.alias,email:result.email,salt,passHash,recoveryHash:newRecoveryHash,created:+result.created||Date.now(),token:result.token};
+      // Код восстановления остаётся тем же: его можно использовать повторно.
+      const result=await cloudRpc('sphere_recover',{p_email:email,p_recovery_hash:recoveryHash,p_hash:passHash,p_new_recovery_hash:recoveryHash});
+      const account={id:result.id,name:result.name,alias:result.alias,email:result.email,salt,passHash,recoveryHash,created:+result.created||Date.now(),token:result.token};
       cacheCloudAccount(account);
       await startSession(account);
       logAction('восстановил доступ',account.email,account.id);
-      showRecoveryCode(recoveryCode,'Пароль изменён');
+      openEditor('Пароль изменён',`<p class="help-text">Пароль обновлён. Код восстановления остался прежним — используйте тот, который вы ввели. Если он мог стать известен кому-то ещё, смените его в настройках.</p>`);
       return;
     }
     const account=accounts.find(item=>normalizeEmail(item.email)===email);
     if(!account)throw new Error('Аккаунт с таким email не найден.');
     const recoveryHash=await hashSecret(code,account.salt);
     if(recoveryHash!==account.recoveryHash)throw new Error('Неверный код восстановления.');
-    const recoveryCode=randomRecoveryCode();
     account.passHash=await hashSecret(password,account.salt);
-    account.recoveryHash=await hashSecret(normalizeRecovery(recoveryCode),account.salt);
+    account.recoveryHash=recoveryHash;
     localStorage.setItem(ACCOUNTS_KEY,JSON.stringify(accounts));
-    await startSession(account);logAction('восстановил доступ',account.email,account.id);showRecoveryCode(recoveryCode,'Пароль изменён');
+    await startSession(account);logAction('восстановил доступ',account.email,account.id);
+    openEditor('Пароль изменён',`<p class="help-text">Пароль обновлён. Код восстановления остался прежним — используйте тот, который вы ввели.</p>`);
   }catch(error){authMessage(error.message||'Не удалось восстановить доступ.');}
   finally{submit.disabled=false;}
 };
