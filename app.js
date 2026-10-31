@@ -1539,17 +1539,11 @@ document.addEventListener('change',e=>{if(e.target.matches('.hit-select')){const
 $('.preferences').innerHTML=`<div id="themePreferences"></div><div class="preference-row" id="accountPreference"></div><div class="preference-row"><div><strong>Утренний план</strong><span>Показывать напоминание при открытии после 08:00</span></div><button class="toggle" data-setting="morning" aria-label="Утренний план"><i></i></button></div><div class="preference-row"><div><strong>Звук выполнения</strong><span>Короткий сигнал при завершении задачи</span></div><button class="toggle" data-setting="sound" aria-label="Звук выполнения"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать колокольчик напоминаний</span></div><button class="toggle" data-setting="focus" aria-label="Фокус-режим"><i></i></button></div><div id="securityPreferences"></div><div class="preference-row"><div><strong>Хранение данных</strong><span>${CLOUD_ENABLED?'Синхронизируется с облаком Supabase. Аудио и видео — в этом браузере.':'Автоматически в этом браузере. Аудио и видео — в IndexedDB.'}</span></div>${button('export','','Экспорт данных')}</div>`;
 function renderThemePreferences(){
   const box=$('#themePreferences'); if(!box)return;
-  const accents=Object.entries(THEME_PRESETS).map(([key,item])=>`<option value="${key}" ${state.accent===key?'selected':''}>${escapeHtml(item.label)}</option>`).join('');
-  box.innerHTML=`<div class="theme-preferences"><div class="theme-pref-head"><div><strong>Оформление</strong><span>Тема и цвет акцента · фон плавно переливается</span></div><span class="theme-preview-dot" style="--preview:${THEME_PRESETS[state.accent]?.color||'#76a9ff'}"></span></div><div class="theme-pref-grid"><label class="theme-field">Тема<select id="themeSelect">${Object.entries(THEME_LABELS).map(([key,label])=>`<option value="${key}" ${state.theme===key?'selected':''}>${label}</option>`).join('')}</select></label><label class="theme-field">Цвет<select id="accentSelect">${accents}</select></label></div><div class="theme-swatches">${Object.entries(THEME_PRESETS).map(([key,item])=>`<button type="button" class="theme-swatch ${state.accent===key?'active':''}" data-accent="${key}" style="--swatch:${item.color}" title="${escapeHtml(item.label)}" aria-label="${escapeHtml(item.label)}"></button>`).join('')}</div></div>`;
+  box.innerHTML=`<div class="theme-preferences"><div class="theme-pref-head"><div><strong>Оформление</strong><span>Тема и цвет акцента · фон плавно переливается</span></div><span class="theme-preview-dot" style="--preview:${THEME_PRESETS[state.accent]?.color||'#76a9ff'}"></span></div><div class="theme-pref-grid single"><label class="theme-field">Тема<select id="themeSelect">${Object.entries(THEME_LABELS).map(([key,label])=>`<option value="${key}" ${state.theme===key?'selected':''}>${label}</option>`).join('')}</select></label></div><div class="theme-swatches" role="radiogroup" aria-label="Цвет акцента">${Object.entries(THEME_PRESETS).map(([key,item])=>`<span class="theme-swatch-wrap"><button type="button" class="theme-swatch ${state.accent===key?'active':''}" data-accent="${key}" style="--swatch:${item.color}" title="${escapeHtml(item.label)}" aria-label="${escapeHtml(item.label)}" aria-pressed="${state.accent===key}"></button><span class="theme-swatch-name">${escapeHtml(item.label)}</span></span>`).join('')}</div></div>`;
   $('#themeSelect').onchange=e=>{
     state.theme=['dark','black','light'].includes(e.target.value)?e.target.value:'dark';
     applyTheme();persist();renderThemePreferences();
     logAction('изменил тему',THEME_LABELS[state.theme]||'Тёмная');
-  };
-  $('#accentSelect').onchange=e=>{
-    state.accent=THEME_PRESETS[e.target.value]?e.target.value:'blue';
-    applyTheme();persist();renderThemePreferences();
-    logAction('изменил цвет темы',THEME_PRESETS[state.accent].label);
   };
   $$('.theme-swatch',box).forEach(swatch=>swatch.onclick=()=>{
     state.accent=THEME_PRESETS[swatch.dataset.accent]?swatch.dataset.accent:'blue';
@@ -1572,6 +1566,7 @@ function completionSound(){if(!state.settings.sound)return;try{const ctx=new (wi
 
 // --- Owner-only admin database -------------------------------------------
 let adminSearch='',adminUsers=[],adminEvents=[],adminLoadedAt=0,adminRefreshSeq=0;
+let adminProfileData=null,adminProfilePhoto='';
 const formatAdminDate=value=>value?new Date(value).toLocaleDateString('ru-RU',{day:'numeric',month:'short',year:'numeric'}):'—';
 const formatAdminDateTime=value=>value?new Date(value).toLocaleString('ru-RU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'—';
 const adminInitials=account=>String(account?.name||account?.alias||account?.email||'?').split(/\s+/).filter(Boolean).slice(0,2).map(part=>part[0]).join('').toUpperCase()||'?';
@@ -1656,10 +1651,10 @@ function renderAdminUsers(){
     const lastSeen=CLOUD_ENABLED?(+account.lastSeen||0):(record.lastSeen||0);
     const owner=isOwner(account);
     return `<div class="admin-user-row">
-      <div class="admin-user-id">${adminAvatarMarkup(account)}<div><strong>${escapeHtml(account.name||account.alias||'Без имени')}${owner?'<em class="admin-owner-badge">владелец</em>':''}</strong><span>@${escapeHtml(account.alias||'без_псевдонима')} · ${escapeHtml(account.email||'')}</span><small>${lastSeen?`Был(а): ${formatAdminDateTime(lastSeen)}`:'Ещё не входил(а)'}</small></div></div>
+      <div class="admin-user-id" data-admin-profile="${escapeHtml(account.id)}" role="button" tabindex="0" title="Открыть профиль и данные пользователя">${adminAvatarMarkup(account)}<div><strong>${escapeHtml(account.name||account.alias||'Без имени')}${owner?'<em class="admin-owner-badge">владелец</em>':''}</strong><span>@${escapeHtml(account.alias||'без_псевдонима')} · ${escapeHtml(account.email||'')}</span><small>${lastSeen?`Был(а): ${formatAdminDateTime(lastSeen)}`:'Ещё не входил(а)'}</small></div></div>
       <span class="admin-date">${formatAdminDate(account.created)}</span>
       <span class="admin-warn-pill ${warnCount?'has':''}">${warnCount?`⚑ ${warnCount}`:'—'}</span>
-      <div class="admin-user-actions">${button('admin-profile',account.id,'Профиль','text-btn')}${button('admin-warn',account.id,'Предупредить','text-btn')}${owner?'':button('admin-delete',account.id,'Удалить','text-btn admin-danger')}</div>
+      <div class="admin-user-actions">${button('admin-warn',account.id,'Предупредить','text-btn')}${owner?'':button('admin-delete',account.id,'Удалить','text-btn admin-danger')}</div>
     </div>`;
   }).join(''):`<div class="admin-empty">${query?'Пользователи не найдены.':CLOUD_ENABLED?'В облачной базе пока нет пользователей.':'В базе пока нет пользователей.'}</div>`;
 }
@@ -1699,10 +1694,60 @@ function renderAdmin(){
   renderAdminCached();
   if(CLOUD_ENABLED&&Date.now()-adminLoadedAt>5000)refreshAdminData();
 }
+function adminProfileDate(value){
+  if(!value)return 'Без даты';
+  try{return formatDate(value);}catch{return String(value);}
+}
+function adminProfileListMarkup(kind='tasks'){
+  const stateData=adminProfileData?.state;
+  if(!stateData||typeof stateData!=='object')return '<p class="admin-empty compact">Подробные списки появятся после обновления SQL-функции в Supabase.</p>';
+  const tasks=Array.isArray(stateData.tasks)?stateData.tasks:[];
+  const goals=Array.isArray(stateData.goals)?stateData.goals:[];
+  const tracks=Array.isArray(stateData.tracks)?stateData.tracks:[];
+  const playlists=Array.isArray(stateData.playlists)?stateData.playlists:[];
+  if(kind==='tasks'||kind==='completed'){
+    const list=[...tasks].filter(task=>kind==='tasks'||+task.progress===100).sort((a,b)=>String(b.date||'').localeCompare(String(a.date||''))||String(a.time||'').localeCompare(String(b.time||'')));
+    if(!list.length)return `<p class="admin-empty compact">${kind==='completed'?'Выполненных задач пока нет.':'Задач пока нет.'}</p>`;
+    const goalsById=new Map(goals.map(goal=>[String(goal.id),goal.title]));
+    return `<div class="admin-profile-list">${list.map(task=>{
+      const progress=+task.progress||0,priority=normalizePriority(task.priority),linked=task.goal?goalsById.get(String(task.goal)):'';
+      return `<div class="admin-profile-item"><div><strong>${escapeHtml(task.title||'Без названия')}</strong><span>${adminProfileDate(task.date)}${task.time?` · ${escapeHtml(task.time)}`:''}${linked?` · цель: ${escapeHtml(linked)}`:''}</span></div><div class="admin-profile-item-side"><span class="admin-profile-pill ${progress===100?'done':''}">${escapeHtml(statuses[progress]||`${progress}%`)}</span><small>${escapeHtml(priorityLabels[priority]||'')}</small></div></div>`;
+    }).join('')}</div>`;
+  }
+  if(kind==='goals'){
+    const list=[...goals].sort((a,b)=>String(a.date||'').localeCompare(String(b.date||'')));
+    if(!list.length)return '<p class="admin-empty compact">Целей пока нет.</p>';
+    return `<div class="admin-profile-list">${list.map(goal=>`<div class="admin-profile-item"><div><strong>${escapeHtml(goal.title||'Без названия')}</strong><span>${escapeHtml(String(goal.description||'Без описания').slice(0,220))}</span><span>До ${adminProfileDate(goal.date)}</span></div><div class="admin-profile-item-side"><span class="admin-profile-pill ${+goal.progress===100?'done':''}">${escapeHtml(statuses[+goal.progress||0]||`${+goal.progress||0}%`)}</span></div></div>`).join('')}</div>`;
+  }
+  if(kind==='tracks'){
+    const list=[...tracks].sort((a,b)=>(+b.created||0)-(+a.created||0));
+    if(!list.length)return '<p class="admin-empty compact">Треков пока нет.</p>';
+    const playlistsById=new Map(playlists.map(playlist=>[String(playlist.id),playlist.name]));
+    return `<div class="admin-profile-list">${list.map(track=>{
+      const playlistName=track.playlist?playlistsById.get(String(track.playlist)):'';
+      const source=/^https?:\/\//i.test(track.sourceUrl||'')?track.sourceUrl:'';
+      return `<div class="admin-profile-item"><div><strong>${escapeHtml(track.title||'Без названия')}</strong><span>${escapeHtml(track.artist||'Исполнитель не указан')}${playlistName?` · ${escapeHtml(playlistName)}`:''}${track.hit?` · ${escapeHtml(hits[track.hit]||track.hit)}`:''}${track.favorite?' · ♥':''}</span>${source?`<a class="admin-profile-source" href="${escapeHtml(source)}" target="_blank" rel="noopener noreferrer">Открыть источник ↗</a>`:''}</div></div>`;
+    }).join('')}</div>`;
+  }
+  return '';
+}
 function adminProfileMarkup(account,warnings,stats,lastSeen){
   const owner=isOwner(account),id=account.id;
+  const stateData=adminProfileData?.state||null;
+  const tasks=stateData&&Array.isArray(stateData.tasks)?stateData.tasks:[];
+  const goals=stateData&&Array.isArray(stateData.goals)?stateData.goals:[];
+  const tracks=stateData&&Array.isArray(stateData.tracks)?stateData.tracks:[];
+  const taskCount=stateData?tasks.length:+stats.tasks||0;
+  const completedCount=stateData?tasks.filter(task=>+task.progress===100).length:+stats.completed||0;
+  const goalCount=stateData?goals.length:+stats.goals||0;
+  const trackCount=stateData?tracks.length:+stats.tracks||0;
+  const photo=adminPhotoData(account).photo;
+  const avatarMarkup=photo?`<button type="button" class="admin-avatar-button" data-admin-photo-view title="Посмотреть фото крупнее">${adminAvatarMarkup(account,'admin-avatar-large')}<span class="admin-avatar-hint">⌕</span></button>`:adminAvatarMarkup(account,'admin-avatar-large');
+  const email=account.email?`<a class="admin-profile-link" href="mailto:${escapeHtml(account.email)}">${escapeHtml(account.email)}</a>`:'—';
+  const statButton=(kind,value,label)=>`<button type="button" class="admin-profile-stat ${kind==='tasks'?'active':''}" data-admin-profile-tab="${kind}"><strong>${value}</strong><span>${label}</span></button>`;
+  const tabButton=(kind,label,count)=>`<button type="button" class="admin-profile-tab ${kind==='tasks'?'active':''}" data-admin-profile-tab="${kind}" role="tab" aria-selected="${kind==='tasks'}">${label} <b>${count}</b></button>`;
   const warningMarkup=warnings.length?warnings.map(warning=>`<div class="admin-warning"><div><strong>${escapeHtml(warning.text)}</strong><small>${formatAdminDateTime(warning.created)}${warning.by?` · ${escapeHtml(warning.by)}`:''}${warning.read?' · прочитано':' · новое'}</small></div></div>`).join(''):'<p class="admin-empty compact">Предупреждений нет.</p>';
-  return `<div class="admin-profile-head">${adminAvatarMarkup(account,'admin-avatar-large')}<div><h3>${escapeHtml(account.name||account.alias||'Без имени')}</h3><p>@${escapeHtml(account.alias||'без_псевдонима')} · ${escapeHtml(account.email||'')}</p>${owner?'<span class="admin-owner-badge">владелец</span>':''}</div></div><div class="admin-profile-stats"><div><strong>${+stats.tasks||0}</strong><span>задач</span></div><div><strong>${+stats.completed||0}</strong><span>выполнено</span></div><div><strong>${+stats.goals||0}</strong><span>целей</span></div><div><strong>${+stats.tracks||0}</strong><span>треков</span></div></div><div class="admin-profile-meta"><span><b>Создан:</b> ${formatAdminDate(account.created)}</span><span><b>Последний вход:</b> ${lastSeen?formatAdminDateTime(lastSeen):'ещё не входил(а)'}</span><span><b>ID:</b> ${escapeHtml(account.id)}</span></div><div class="admin-warning-list"><div class="admin-subhead"><strong>Предупреждения</strong><span>${warnings.length}</span></div>${warningMarkup}</div><div class="admin-profile-actions">${button('admin-warn',id,'Выдать предупреждение','secondary-btn')}${owner?'':button('admin-delete',id,'Удалить профиль','secondary-btn admin-danger')}</div>`;
+  return `<div class="admin-profile-head">${avatarMarkup}<div><h3>${escapeHtml(account.name||account.alias||'Без имени')}</h3><p>@${escapeHtml(account.alias||'без_псевдонима')} · ${email}</p>${owner?'<span class="admin-owner-badge">владелец</span>':''}</div></div><div class="admin-profile-stats">${statButton('tasks',taskCount,'задач')}${statButton('completed',completedCount,'выполнено')}${statButton('goals',goalCount,'целей')}${statButton('tracks',trackCount,'треков')}</div><div class="admin-profile-meta"><span><b>Создан:</b> ${formatAdminDate(account.created)}</span><span><b>Последний вход:</b> ${lastSeen?formatAdminDateTime(lastSeen):'ещё не входил(а)'}</span><span><b>ID:</b> <span class="mono">${escapeHtml(account.id)}</span></span></div><div class="admin-profile-sections"><div class="admin-profile-tabs" role="tablist">${tabButton('tasks','Задачи',taskCount)}${tabButton('completed','Выполненные',completedCount)}${tabButton('goals','Цели',goalCount)}${tabButton('tracks','Треки',trackCount)}</div><div class="admin-profile-panel" id="adminProfilePanel">${adminProfileListMarkup('tasks')}</div></div><div class="admin-warning-list"><div class="admin-subhead"><strong>Предупреждения</strong><span>${warnings.length}</span></div>${warningMarkup}</div><div class="admin-profile-actions">${button('admin-warn',id,'Выдать предупреждение','secondary-btn')}${owner?'':button('admin-delete',id,'Удалить профиль','secondary-btn admin-danger')}</div>`;
 }
 async function adminProfileDialog(id){
   if(CLOUD_ENABLED){
@@ -1712,6 +1757,8 @@ async function adminProfileDialog(id){
     const account=profile?.account||{};if(!account.id)return;
     const warnings=Array.isArray(profile.warnings)?profile.warnings:[];
     const stats=profile.stats||{};
+    adminProfileData={account,warnings,stats,lastSeen:account.lastSeen,state:profile.state&&typeof profile.state==='object'?profile.state:null};
+    adminProfilePhoto=adminPhotoData(account).photo||'';
     openEditor(`Профиль · ${account.name||account.alias}`,adminProfileMarkup(account,warnings,stats,account.lastSeen),null);
     logAction('открыл профиль пользователя',`${account.name||account.alias} (${account.email})`,id);
     return;
@@ -1720,6 +1767,8 @@ async function adminProfileDialog(id){
   const record=adminUserRecord(id),userState=normalizeState(readStore(accountKey(account),null)||emptyState());
   const warnings=[...record.warnings].reverse();
   const stats={tasks:userState.tasks.length,completed:userState.tasks.filter(task=>task.progress===100).length,goals:userState.goals.length,tracks:userState.tracks.length};
+  adminProfileData={account,warnings,stats,lastSeen:record.lastSeen,state:{tasks:userState.tasks,goals:userState.goals,tracks:userState.tracks,playlists:userState.playlists}};
+  adminProfilePhoto=adminPhotoData(account).photo||'';
   openEditor(`Профиль · ${account.name||account.alias}`,adminProfileMarkup(account,warnings,stats,record.lastSeen),null);
   logAction('открыл профиль пользователя',`${account.name||account.alias} (${account.email})`,id);
 }
@@ -1800,6 +1849,38 @@ $('#adminSearch')?.addEventListener('input',e=>{adminSearch=e.target.value;rende
 $('#adminExport')?.addEventListener('click',adminExportDb);
 $('#adminClearLog')?.addEventListener('click',adminClearLog);
 $('#adminSupportRefresh')?.addEventListener('click',()=>{adminLoadedAt=0;refreshAdminData();});
+function openAdminPhotoViewer(){
+  const dialog=$('#adminPhotoDialog'),image=$('#adminPhotoImage');
+  if(!dialog||!image||!adminProfilePhoto)return;
+  image.src=adminProfilePhoto;
+  const name=adminProfileData?.account?.name||adminProfileData?.account?.alias||'Пользователь';
+  $('#adminPhotoTitle').textContent=`Фото · ${name}`;
+  const download=$('#adminPhotoDownload');
+  if(download){download.href=adminProfilePhoto;download.download=`sphere-photo-${String(adminProfileData?.account?.alias||'user')}.jpg`;}
+  if(!dialog.open)dialog.showModal();
+}
+document.addEventListener('click',e=>{
+  const profileRow=e.target.closest('[data-admin-profile]');
+  if(profileRow){adminProfileDialog(profileRow.dataset.adminProfile);return;}
+  const tab=e.target.closest('[data-admin-profile-tab]');
+  if(tab){
+    const kind=tab.dataset.adminProfileTab;
+    if(!['tasks','completed','goals','tracks'].includes(kind))return;
+    $$('[data-admin-profile-tab]').forEach(button=>{
+      const active=button.dataset.adminProfileTab===kind;
+      button.classList.toggle('active',active);
+      if(button.classList.contains('admin-profile-tab'))button.setAttribute('aria-selected',String(active));
+    });
+    const panel=$('#adminProfilePanel');if(panel)panel.innerHTML=adminProfileListMarkup(kind);
+    return;
+  }
+  const photo=e.target.closest('[data-admin-photo-view]');
+  if(photo)openAdminPhotoViewer();
+});
+document.addEventListener('keydown',e=>{
+  const profileRow=e.target.closest('[data-admin-profile]');
+  if(profileRow&&(e.key==='Enter'||e.key===' ')){e.preventDefault();adminProfileDialog(profileRow.dataset.adminProfile);}
+});
 
 // --- Предупреждения, поддержка и подробный журнал -------------------------
 document.body.insertAdjacentHTML('beforeend', `
@@ -1829,11 +1910,19 @@ document.body.insertAdjacentHTML('beforeend', `
 <dialog id="adminLogDialog" class="admin-log-dialog card" aria-labelledby="adminLogTitle">
   <div class="admin-log-dialog-head"><div><p class="eyebrow">АУДИТ</p><h2 id="adminLogTitle">Журнал действий</h2></div><label class="admin-search admin-log-search"><span>⌕</span><input id="adminLogSearch" type="search" placeholder="Поиск по действию, пользователю, деталям" autocomplete="off" /></label><button type="button" class="modal-close" id="adminLogClose" aria-label="Закрыть">×</button></div>
   <div class="admin-log-dialog-body"><div class="admin-log-full-list" id="adminLogFullList"></div><aside class="admin-log-detail" id="adminLogDetail"></aside></div>
+</dialog>
+<dialog id="adminPhotoDialog" class="admin-photo-dialog card" aria-labelledby="adminPhotoTitle">
+  <button type="button" class="modal-close" id="adminPhotoClose" aria-label="Закрыть">×</button>
+  <div class="admin-photo-stage"><img id="adminPhotoImage" alt="Фото профиля" /></div>
+  <div class="admin-photo-foot"><strong id="adminPhotoTitle">Фото профиля</strong><a class="text-btn" id="adminPhotoDownload" download>Скачать</a></div>
 </dialog>`);
 
 const warningDialog=$('#warningDialog');
 $('#warningClose').onclick=()=>warningDialog.close();
 warningDialog.addEventListener('click',e=>{if(e.target===warningDialog)warningDialog.close();});
+const adminPhotoDialog=$('#adminPhotoDialog');
+$('#adminPhotoClose').onclick=()=>adminPhotoDialog.close();
+adminPhotoDialog.addEventListener('click',e=>{if(e.target===adminPhotoDialog)adminPhotoDialog.close();});
 function showWarnings(list){
   const pending=(Array.isArray(list)?list:[]).filter(warning=>warning&&warning.text&&!shownWarningIds.has(String(warning.id||warning.text)));
   if(!pending.length)return;
@@ -2035,6 +2124,54 @@ $('#adminLogFullList').addEventListener('click',e=>{const item=e.target.closest(
 $('#adminLogList').addEventListener('click',e=>{const item=e.target.closest('[data-log-event]');if(item)openAdminLogDialog(item.dataset.logEvent);});
 $('#adminLogList').addEventListener('keydown',e=>{const item=e.target.closest('[data-log-event]');if(item&&(e.key==='Enter'||e.key===' ')){e.preventDefault();openAdminLogDialog(item.dataset.logEvent);}});
 
+// --- Шутливая защита от просмотра исходного кода --------------------------
+function sourceGuardExempt(){
+  return isOwner(currentAccount)||sessionStorage.getItem('sphere-dev-bypass')==='1';
+}
+function showSourceGuard(){
+  if(sourceGuardExempt())return;
+  let guard=$('#sourceGuard');
+  if(!guard){
+    guard=document.createElement('div');
+    guard.id='sourceGuard';
+    guard.className='source-guard';
+    guard.innerHTML=`<div class="source-guard-card"><div class="source-guard-emoji">🕵️‍♂️</div><p class="eyebrow">ТУТ ЖИВЁТ МАГИЯ</p><h1>Ой, посмотреть исходный код не получится</h1><p>Код спрятан надёжнее, чем последняя печенька 🍪. Закройте инструменты разработчика и возвращайтесь — в Сфере ещё столько всего интересного.</p><button type="button" class="primary-btn" data-source-return>Вернуться в Сферу</button><small>Подсказка: разработчики тоже люди, но этот код — под замком 🔐</small></div>`;
+    document.body.append(guard);
+    guard.addEventListener('click',event=>{
+      if(event.target.closest('[data-source-return]'))location.reload();
+    });
+  }
+  guard.hidden=false;
+  document.documentElement.classList.add('source-guard-open');
+  requestAnimationFrame(()=>guard.classList.add('visible'));
+}
+document.addEventListener('keydown',event=>{
+  if(sourceGuardExempt())return;
+  const key=String(event.key||'').toLowerCase();
+  const devtools=(event.key==='F12')||((event.ctrlKey||event.metaKey)&&event.shiftKey&&['i','j','c'].includes(key));
+  const viewSource=(event.ctrlKey||event.metaKey)&&key==='u';
+  if(devtools||viewSource){
+    event.preventDefault();
+    event.stopPropagation();
+    showSourceGuard();
+  }
+},true);
+document.addEventListener('contextmenu',event=>{
+  if(sourceGuardExempt())return;
+  if(event.target.closest('input,textarea,select,[contenteditable="true"]'))return;
+  event.preventDefault();
+  showSourceGuard();
+},true);
+let sourceGuardBaseline=null;
+setTimeout(()=>{
+  sourceGuardBaseline={width:Math.max(0,window.outerWidth-window.innerWidth),height:Math.max(0,window.outerHeight-window.innerHeight)};
+},1400);
+setInterval(()=>{
+  if(!sourceGuardBaseline||sourceGuardExempt()||document.hidden)return;
+  const widthGap=Math.max(0,window.outerWidth-window.innerWidth),heightGap=Math.max(0,window.outerHeight-window.innerHeight);
+  if(widthGap>sourceGuardBaseline.width+260||heightGap>sourceGuardBaseline.height+340)showSourceGuard();
+},1800);
+
 function stopCurrentTrack(){playGeneration++;embedPlaying=false;audio.pause();audio.removeAttribute('src');audio.load();currentTrack='';if(objectURL)URL.revokeObjectURL(objectURL);objectURL='';stopAura();$('#nowPlayingTitle').textContent='Нет активного трека';$('#nowPlayingArtist').textContent='';$('.album-art').innerHTML='<span>♪</span>';$('#playBtn').textContent='▶';$('#musicHero').classList.add('empty-player');$('#musicHero').classList.remove('embed-playing','aura-on');$('#musicProgressBar')?.classList.remove('disabled','seeking');musicProgressUpdate();renderMusic();}
 document.addEventListener('click',async e=>{
   const target=e.target.closest('[data-action]');if(!target)return;const {action,id}=target.dataset;
@@ -2091,6 +2228,46 @@ async function hashSecret(secret, salt) {
   return (hash >>> 0).toString(16).padStart(8,'0');
 }
 function authMessage(text=''){const el=$('#authMessage');if(el)el.textContent=text;}
+function emailValidationError(value){
+  const email=normalizeEmail(value);
+  if(!email)return 'Введите email.';
+  if(email.length>254)return 'Email слишком длинный.';
+  const at=email.indexOf('@');
+  if(at<1||at!==email.lastIndexOf('@'))return 'Введите email в формате name@domain.ru.';
+  const local=email.slice(0,at),domain=email.slice(at+1);
+  if(local.length>64)return 'Часть email до @ слишком длинная.';
+  if(!/^[a-z0-9!#$%&'*+/=?^_`{|}~.-]+$/i.test(local))return 'В email есть недопустимые символы.';
+  if(local.startsWith('.')||local.endsWith('.')||local.includes('..'))return 'Точки в email расставлены неверно.';
+  const labels=domain.split('.');
+  if(labels.length<2)return 'После @ укажите почтовый домен, например mail.ru.';
+  for(const label of labels){
+    if(!label||label.length>63||!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label))return 'Почтовый домен после @ выглядит неверно.';
+  }
+  const tld=labels[labels.length-1];
+  if(!/^(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})$/i.test(tld))return 'У почтового домена должен быть нормальный адрес, например .ru или .com.';
+  return '';
+}
+async function mailDomainAcceptsEmail(domain){
+  const endpoints=[
+    `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=MX`,
+    `https://dns.google/resolve?name=${encodeURIComponent(domain)}&type=MX`
+  ];
+  for(const url of endpoints){
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),6500);
+    try{
+      const response=await fetch(url,{headers:{Accept:'application/dns-json'},signal:controller.signal,cache:'no-store'});
+      if(!response.ok)continue;
+      const data=await response.json();
+      if(+data?.Status===3)return false;
+      if(+data?.Status!==0)continue;
+      const mx=(Array.isArray(data.Answer)?data.Answer:[]).filter(item=>+item.type===15).map(item=>String(item.data||'').trim());
+      if(!mx.length)return false;
+      return mx.some(record=>record&&!/^0\s+\.?$/.test(record));
+    }catch{}
+    finally{clearTimeout(timer);}
+  }
+  return false;
+}
 function showAuth(tab = 'login') {
   const screen=$('#authScreen'); if(!screen) return;
   screen.hidden=false; document.body.classList.add('auth-locked');
@@ -2270,11 +2447,23 @@ $('#registerForm').onsubmit=async e=>{
   submit.disabled=true;
   try{
     const data=new FormData(form),email=normalizeEmail(data.get('email')),alias=String(data.get('alias')||'').trim().replace(/^@/,''),password=String(data.get('password')||''),password2=String(data.get('password2')||''),name=String(data.get('name')||'').trim();
-    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))throw new Error('Введите корректный email.');
+    const emailProblem=emailValidationError(email);if(emailProblem)throw new Error(emailProblem);
     if(alias.length<3)throw new Error('Псевдоним должен быть не короче 3 символов.');
     if(/\s/.test(alias))throw new Error('Псевдоним не должен содержать пробелы.');
     if(password.length<6)throw new Error('Пароль должен быть не короче 6 символов.');
     if(password!==password2)throw new Error('Пароли не совпадают.');
+    if(CLOUD_ENABLED){
+      const existingSalt=await cloudRpc('sphere_salt',{p_identifier:email});
+      if(existingSalt)throw new Error('Аккаунт с таким email уже существует. Войдите или восстановите пароль.');
+    }else if(accounts.some(item=>normalizeEmail(item.email)===email)){
+      throw new Error('Аккаунт с таким email уже существует. Войдите или восстановите пароль.');
+    }
+    if(CLOUD_ENABLED||navigator.onLine){
+      submit.textContent='Проверяем почту…';
+      const mailOk=await mailDomainAcceptsEmail(email.slice(email.indexOf('@')+1));
+      if(!mailOk)throw new Error('Почтовый домен не найден или не принимает письма. Проверьте адрес после @.');
+      submit.textContent='Создаём аккаунт…';
+    }
     const salt=randomHex(),recoveryCode=randomRecoveryCode(),passHash=await hashSecret(password,salt),recoveryHash=await hashSecret(normalizeRecovery(recoveryCode),salt);
     const seed=firstAccountSeed?JSON.parse(JSON.stringify(firstAccountSeed)):emptyState();
     seed.profile.name=name||seed.profile.name||alias;seed.profile.alias=alias;
@@ -2301,7 +2490,7 @@ $('#registerForm').onsubmit=async e=>{
     accounts.push(account);localStorage.setItem(ACCOUNTS_KEY,JSON.stringify(accounts));
     await startSession(account);logAction('зарегистрировался',`${account.name} · @${account.alias}`,account.id);showRecoveryCode(recoveryCode);
   }catch(error){authMessage(error.message||'Не удалось создать аккаунт.');}
-  finally{submit.disabled=false;}
+  finally{submit.disabled=false;submit.textContent='Создать аккаунт';}
 };
 $('#recoveryForm').onsubmit=async e=>{
   e.preventDefault();authMessage('');const form=e.currentTarget,submit=$('button[type="submit"]',form);
