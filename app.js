@@ -33,9 +33,9 @@ const THEME_PRESETS = {
   ice:{label:'Ледяной',color:'#72d6ff'},
   lime:{label:'Лаймовый',color:'#b8e36a'}
 };
-const THEME_LABELS = {dark:'Тёмная',black:'Чёрная',light:'Светлая'};
+const THEME_LABELS = {black:'Чёрная',light:'Светлая'};
 const NEWS_UNDER_MAINTENANCE = true;
-const emptyState = () => ({version:3,tasks:[],goals:[],playlists:[],tracks:[],profile:{name:'',alias:'',photo:'',photoX:50,photoY:50,photoScale:1,layout:'card',video:'',videoDuration:0,ownerPrefix:'Владелец',status:'✦ В своём ритме'},habits:[{id:uid(),name:'Утренняя зарядка',days:[]},{id:uid(),name:'Читать 20 минут',days:[]}],note:'',theme:'dark',accent:'blue',settings:{sound:false,focus:false,morning:false,volume:.85},weather:{city:'Москва',lat:55.7558,lon:37.6173,timezone:'Europe/Moscow',temp:null,code:null,desc:'',updated:0},newsSources:[],newsFeed:[],newsCustom:[],sessions:0});
+const emptyState = () => ({version:3,tasks:[],goals:[],playlists:[],tracks:[],profile:{name:'',alias:'',photo:'',photoX:50,photoY:50,photoScale:1,layout:'card',video:'',videoDuration:0,ownerPrefix:'Владелец',status:'✦ В своём ритме'},habits:[{id:uid(),name:'Утренняя зарядка',days:[]},{id:uid(),name:'Читать 20 минут',days:[]}],note:'',theme:'black',accent:'blue',settings:{sound:false,focus:false,morning:false,volume:.85},weather:{city:'Москва',lat:55.7558,lon:37.6173,timezone:'Europe/Moscow',temp:null,code:null,desc:'',updated:0},newsSources:[],newsFeed:[],newsCustom:[],sessions:0});
 const readStore = (key, fallback = null) => { try { const value = JSON.parse(localStorage.getItem(key)); return value ?? fallback; } catch { return fallback; } };
 function normalizeState(raw) {
   const base = emptyState(), source = raw && typeof raw === 'object' ? raw : {};
@@ -51,7 +51,7 @@ function normalizeState(raw) {
   if (!['card','row'].includes(next.profile.layout)) next.profile.layout = 'card';
   next.weather = {...base.weather, ...(source.weather || {})};
   next.settings = {...base.settings, ...(source.settings || {})};
-  if (!['dark','black','light'].includes(next.theme)) next.theme = 'dark';
+  if (!['black','light'].includes(next.theme)) next.theme = 'black';
   if (!THEME_PRESETS[next.accent]) next.accent = 'blue';
   next.newsSources = Array.isArray(source.newsSources) ? source.newsSources : [];
   next.newsFeed = Array.isArray(source.newsFeed) ? source.newsFeed : [];
@@ -578,6 +578,14 @@ function mixThemeColor(base, tint, amount) {
 function themeRgbCss(rgb) {
   return `rgb(${rgb.join(',')})`;
 }
+function darkenThemeColor(value, amount = .32) {
+  const rgb = mixThemeColor(themeRgb(value), [0, 0, 0], amount);
+  return `#${rgb.map(channel => channel.toString(16).padStart(2, '0')).join('')}`;
+}
+function themeAccentColor(key, theme = state.theme) {
+  const color = THEME_PRESETS[key]?.color || THEME_PRESETS.blue.color;
+  return theme === 'black' ? darkenThemeColor(color) : color;
+}
 function themeHsl(value) {
   const [r,g,b]=themeRgb(value).map(channel=>channel/255), max=Math.max(r,g,b), min=Math.min(r,g,b), lightness=(max+min)/2;
   let hue=0, saturation=0;
@@ -593,54 +601,49 @@ function themeContrast(rgb) {
   return luminance > 0.62 ? '#101722' : '#ffffff';
 }
 function applyTheme() {
-  const theme = ['dark','black','light'].includes(state.theme) ? state.theme : 'dark';
-  const preset = THEME_PRESETS[state.accent] || THEME_PRESETS.blue;
-  const light = theme === 'light', black = theme === 'black';
-  const color = preset.color, accent = themeRgb(color), hsl = themeHsl(color);
+  const theme = state.theme === 'light' ? 'light' : 'black';
+  state.theme = theme;
+  const light = theme === 'light', black = !light;
+  const color = themeAccentColor(state.accent, theme), accent = themeRgb(color), hsl = themeHsl(color);
   document.documentElement.dataset.theme = theme;
   document.documentElement.dataset.accent = state.accent;
   const themeBtn = $('#themeBtn');
   if (themeBtn) {
-    themeBtn.textContent = light ? '☾' : black ? '◐' : '☼';
+    themeBtn.textContent = light ? '☾' : '☼';
     themeBtn.title = `Тема: ${THEME_LABELS[theme]}. Нажми, чтобы сменить тему.`;
   }
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', light ? '#eef3f9' : black ? '#000000' : '#0d1017');
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', light ? '#eef3f9' : '#000000');
   document.documentElement.style.setProperty('--blue', color);
-  document.documentElement.style.setProperty('--accent-ink', light ? themeRgbCss(mixThemeColor([62,114,201],accent,.12)) : color);
+  document.documentElement.style.setProperty('--accent-ink', light ? themeRgbCss(mixThemeColor([62,114,201],accent,.12)) : themeRgbCss(mixThemeColor(accent,[255,255,255],.24)));
   document.documentElement.style.setProperty('--accent-contrast', themeContrast(accent));
-  document.documentElement.style.setProperty('--accent-2', themeTone(hsl,46));
-  document.documentElement.style.setProperty('--accent-3', themeTone(hsl,-52));
-  document.documentElement.style.setProperty('--accent-gradient', `linear-gradient(135deg, ${themeTone(hsl,38)}, ${color} 48%, ${themeTone(hsl,-42)})`);
+  const tone2=themeTone(hsl,46), tone3=themeTone(hsl,-52), toneStart=themeTone(hsl,38), toneEnd=themeTone(hsl,-42);
+  const darkTone=value=>black?`color-mix(in srgb, ${value} 78%, #000)`:value;
+  document.documentElement.style.setProperty('--accent-2', darkTone(tone2));
+  document.documentElement.style.setProperty('--accent-3', darkTone(tone3));
+  document.documentElement.style.setProperty('--accent-gradient', `linear-gradient(135deg, ${darkTone(toneStart)}, ${color} 48%, ${darkTone(toneEnd)})`);
   const base = light
     ? {bg:'#f3f6fb',sidebar:'#eaf0f8',panel:'#ffffff',panel2:'#f5f8fc',line:'#d2dce9'}
-    : black
-      ? {bg:'#000000',sidebar:'#000000',panel:'#080808',panel2:'#0d0d0d',line:'#232323'}
-      : {bg:'#0d1017',sidebar:'#11151d',panel:'#151a23',panel2:'#191f29',line:'#29303b'};
+    : {bg:'#000000',sidebar:'#000000',panel:'#080808',panel2:'#0d0d0d',line:'#232323'};
   const weights = light
     ? {bg:.12,sidebar:.18,panel:.06,panel2:.10,line:.22}
-    : black
-      ? {bg:0,sidebar:0,panel:0,panel2:0,line:0}
-      : {bg:.13,sidebar:.18,panel:.10,panel2:.13,line:.24};
+    : {bg:0,sidebar:0,panel:0,panel2:0,line:0};
   for (const key of ['bg','sidebar','panel','panel2','line']) document.documentElement.style.setProperty(`--${key}`,themeRgbCss(mixThemeColor(themeRgb(base[key]),accent,weights[key])));
   const textStyles = light
     ? {text:['#141c2a',.04],muted:['#4b596e',.14],dim:['#4f5c70',.10]}
-    : black
-      ? {text:['#ffffff',0],muted:['#a1a1a1',0],dim:['#6e6e6e',0]}
-      : {text:['#f4f5f8',.05],muted:['#8b93a3',.12],dim:['#626b7b',.14]};
+    : {text:['#ffffff',0],muted:['#a1a1a1',0],dim:['#6e6e6e',0]};
   for (const [key,[baseColor,amount]] of Object.entries(textStyles)) document.documentElement.style.setProperty(`--${key}`,themeRgbCss(mixThemeColor(themeRgb(baseColor),accent,amount)));
-  const glow = light ? .20 : black ? 0 : .26, glow2 = light ? .14 : black ? 0 : .19;
-  const ambient = light ? .22 : black ? 0 : .34;
+  const glow = light ? .20 : 0, glow2 = light ? .14 : 0;
+  const ambient = light ? .22 : 0;
   document.documentElement.style.setProperty('--bg-gradient', black ? 'none' : `radial-gradient(circle at 14% 18%, ${themeTone(hsl,0,glow)} 0%, transparent 54%), radial-gradient(circle at 86% 14%, ${themeTone(hsl,54,glow2)} 0%, transparent 52%), radial-gradient(circle at 52% 92%, ${themeTone(hsl,-58,glow2)} 0%, transparent 58%)`);
   document.documentElement.style.setProperty('--ambient-a', themeTone(hsl,0,ambient));
   document.documentElement.style.setProperty('--ambient-b', themeTone(hsl,54,ambient * .86));
   document.documentElement.style.setProperty('--ambient-c', themeTone(hsl,-58,ambient * .8));
-  document.documentElement.style.setProperty('--ambient-opacity', light ? '.28' : black ? '0' : '.48');
+  document.documentElement.style.setProperty('--ambient-opacity', light ? '.28' : '0');
 }
 $('#themeBtn').onclick = () => {
-  const themes=['dark','black','light'];
-  state.theme=themes[(themes.indexOf(state.theme)+1)%themes.length];
+  state.theme = state.theme === 'light' ? 'black' : 'light';
   applyTheme(); renderThemePreferences(); persist();
-  logAction('переключил тему', THEME_LABELS[state.theme] || 'Тёмная');
+  logAction('переключил тему', THEME_LABELS[state.theme] || 'Чёрная');
 };
 applyTheme();
 
@@ -1488,7 +1491,7 @@ function renderMusic() {
   list=[...list].sort((a,b)=>b.created-a.created);
   const playlist=state.playlists.find(p=>p.id===selectedPlaylist);
   $('#trackCount').textContent=`${list.length} треков`;
-  $('#trackList').innerHTML=(selectedPlaylist?`<div class="manage-row"><strong>${escapeHtml(selectedPlaylist==='favorites'?'Любимые треки':playlist?.name||'')}</strong>${button('playlist-all','','Все плейлисты','text-btn')}</div>`:'')+(list.length?list.map(t=>`<div class="track-row" data-track-row="${t.id}">${coverMarkup(t)}<div class="track-info"><div class="task-copy"><strong>${escapeHtml(t.title)}</strong><small>${escapeHtml(t.artist||'Исполнитель не указан')}${t.service?` · ${escapeHtml(t.service)}`:''}</small></div><div class="track-controls"><select class="hit-select" data-track="${t.id}" aria-label="Категория ${escapeHtml(t.title)}">${Object.entries(hits).map(([key,label])=>`<option value="${key}" ${key===t.hit?'selected':''}>${label}</option>`).join('')}</select>${button('track-play',t.id,currentTrack===t.id&&(embedPlaying||!audio.paused)?'Ⅱ':'▶','row-btn')}${t.sourceUrl?`<a class="row-btn track-source" href="${escapeHtml(t.sourceUrl)}" target="_blank" rel="noopener noreferrer" title="Открыть источник">↗</a>`:''}${button('track-edit',t.id,'✎','row-btn')}${button('track-delete',t.id,'×','row-btn')}</div></div></div>`).join(''):(selectedPlaylist==='favorites'?empty('Ты пока не отметил ни одного трека сердечком.'):''));
+  $('#trackList').innerHTML=(selectedPlaylist?`<div class="manage-row"><strong>${escapeHtml(selectedPlaylist==='favorites'?'Любимые треки':playlist?.name||'')}</strong>${button('playlist-all','','Все плейлисты','text-btn')}</div>`:'')+(list.length?list.map(t=>`<div class="track-row" data-track-row="${t.id}">${coverMarkup(t)}<div class="track-info"><div class="task-copy"><strong>${escapeHtml(t.title)}</strong><small>${escapeHtml(t.artist||'Исполнитель не указан')}${t.service?` · ${escapeHtml(t.service)}`:''}</small></div><div class="track-controls"><select class="hit-select" data-track="${t.id}" aria-label="Категория ${escapeHtml(t.title)}">${Object.entries(hits).map(([key,label])=>`<option value="${key}" ${key===t.hit?'selected':''}>${label}</option>`).join('')}</select>${t.external?`<a class="row-btn track-source" href="${escapeHtml(t.sourceUrl)}" target="_blank" rel="noopener noreferrer" title="Открыть во ВКонтакте">↗</a>`:button('track-play',t.id,currentTrack===t.id&&(embedPlaying||!audio.paused)?'Ⅱ':'▶','row-btn')}${!t.external&&t.sourceUrl?`<a class="row-btn track-source" href="${escapeHtml(t.sourceUrl)}" target="_blank" rel="noopener noreferrer" title="Открыть источник">↗</a>`:''}${button('track-edit',t.id,'✎','row-btn')}${button('track-delete',t.id,'×','row-btn')}</div></div></div>`).join(''):(selectedPlaylist==='favorites'?empty('Ты пока не отметил ни одного трека сердечком.'):''));
 }
 function playlistEditor(id) {
   const playlist=state.playlists.find(p=>p.id===id);
@@ -1496,6 +1499,7 @@ function playlistEditor(id) {
 }
 $('#createPlaylist').onclick=()=>playlistEditor(null);
 $('#addTrack').onclick=()=>addTrackDialog('');
+$('#importVk').onclick=()=>importVkDialog('');
 function trackMetaFromFileName(name){
   const base=String(name||'').replace(/\.[a-z0-9]{2,5}$/i,'').trim();
   const parts=base.split(/\s+[–—-]\s+/);
@@ -1541,6 +1545,40 @@ function addTrackDialog(playlistId){
       toast(addedTracks.length===1?'Трек добавлен':`Добавлено треков: ${addedTracks.length}`);
     },'Добавить');
 }
+function importVkDialog(playlistId){
+  if(!state.playlists.length){
+    state.playlists.push({id:uid(),name:'Моя музыка'});
+    persist();
+    renderMusic();
+  }
+  const playlists=state.playlists;
+  const target=playlistId||(selectedPlaylist&&selectedPlaylist!=='favorites'?selectedPlaylist:'')||playlists[0].id;
+  openEditor('Импорт трека из ВКонтакте',
+    field('Ссылка на трек',input('url','','url','required maxlength="500" placeholder="https://vk.ru/audio..." autocomplete="off"'))+
+    field('Название',input('title','','text','required maxlength="160" placeholder="Например: Ты Одна"'))+
+    field('Исполнитель',input('artist','','text','maxlength="120" placeholder="Например: FLOCKAA"'))+
+    field('Плейлист',`<select name="playlist">${playlists.map(p=>`<option value="${p.id}" ${p.id===target?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select>`)+
+    field('Категория',`<select name="hit">${Object.entries(hits).map(([key,label])=>`<option value="${key}">${label}</option>`).join('')}</select>`)+
+    '<p class="help-text">ВКонтакте не отдаёт прямой аудиопоток для импорта. Трек сохранится как карточка со ссылкой: кнопка ↗ и нажатие на строку откроют его на сайте ВКонтакте.</p>',
+    data=>{
+      const raw=String(data.get('url')||'').trim();
+      if(!raw)throw new Error('Вставьте ссылку на трек ВКонтакте.');
+      let url;
+      try{url=new URL(/^[a-z][a-z0-9+.-]*:/i.test(raw)?raw:`https://${raw}`);}catch{throw new Error('Введите корректную ссылку.');}
+      if(!/^https?:$/.test(url.protocol))throw new Error('Ссылка должна начинаться с http:// или https://.');
+      const host=url.hostname.toLowerCase();
+      if(!(host==='vk.com'||host.endsWith('.vk.com')||host==='vk.ru'||host.endsWith('.vk.ru')))throw new Error('Поддерживаются только ссылки ВКонтакте (vk.com или vk.ru).');
+      const title=String(data.get('title')||'').trim();
+      if(!title)throw new Error('Введите название трека.');
+      const playlist=String(data.get('playlist')),hit=String(data.get('hit'));
+      const track={id:uid(),title,artist:String(data.get('artist')||'').trim(),playlist,hit,favorite:false,created:Date.now(),cover:'',sourceUrl:url.href,service:'ВКонтакте',external:true};
+      state.tracks.push(track);
+      selectedPlaylist=playlist;
+      logAction('импортировал трек из ВКонтакте',`«${title}»${track.artist?` · ${track.artist}`:''}`,track.id);
+      saveAndRender();
+      toast('Ссылка на трек добавлена. Аудио откроется во ВКонтакте.');
+    },'Добавить');
+}
 async function editTrack(id,playlistId) {
   const track=state.tracks.find(t=>t.id===id),playlists=state.playlists;
   if(!playlists.length){playlistEditor(null);return;}
@@ -1554,7 +1592,7 @@ async function editTrack(id,playlistId) {
       if(file?.size>150*1024*1024)throw new Error('Максимальный размер аудиофайла — 150 МБ.');
       let cover=track?.cover||'';
       if(file?.size){if(!file.type.startsWith('audio/')&&!/\.(mp3|m4a|ogg|wav|flac)$/i.test(file.name))throw new Error('Выберите аудиофайл.');cover=await embeddedCover(file)||cover;await audioStore('put',id,file);}
-      const record={...track,id,title,artist:String(data.get('artist')).trim(),playlist:String(data.get('playlist')),hit:String(data.get('hit')),cover,created:track?.created||Date.now(),favorite:!!track?.favorite,audioUrl:file?.size?'':track?.audioUrl};
+      const record={...track,id,title,artist:String(data.get('artist')).trim(),playlist:String(data.get('playlist')),hit:String(data.get('hit')),cover,created:track?.created||Date.now(),favorite:!!track?.favorite,audioUrl:file?.size?'':track?.audioUrl,external:file?.size?false:track?.external,sourceUrl:file?.size?'':track?.sourceUrl,service:file?.size?'':track?.service};
       if(track)state.tracks[state.tracks.indexOf(track)]=record;else state.tracks.push(record);
       logAction(track?'изменил трек':'добавил трек',`«${title}»${record.artist?` · ${record.artist}`:''}`,id);
       saveAndRender();toast('Трек сохранён');
@@ -1579,6 +1617,11 @@ async function playTrack(id) {
     return;
   }
   const track=state.tracks.find(t=>t.id===id);if(!track)return;
+  if(track.external&&track.sourceUrl){
+    window.open(track.sourceUrl,'_blank','noopener,noreferrer');
+    toast('Трек открыт во ВКонтакте.');
+    return;
+  }
   if(track.embedUrl&&!track.audioUrl){playEmbed(track);return;}
   const generation=++playGeneration;
   try{
@@ -1592,7 +1635,15 @@ async function playTrack(id) {
     $('#nowPlayingTitle').textContent=track.title;$('#nowPlayingArtist').textContent=track.artist||'Исполнитель не указан';$('.album-art').innerHTML=coverMarkup(track,'playing-cover');$('#musicHero').classList.remove('empty-player','embed-playing');await audio.play();startAura(track);
   }catch(error){stopAura();toast(error.message||'Не удалось воспроизвести трек.',true);}
 }
-function nextTrack(direction) {let list=selectedPlaylist==='favorites'?state.tracks.filter(t=>t.favorite):state.tracks.filter(t=>!selectedPlaylist||t.playlist===selectedPlaylist);if(musicSort!=='new'&&!selectedPlaylist)list=list.filter(t=>t.hit===musicSort);if(!list.length){toast(selectedPlaylist==='favorites'?'В любимых пока нет треков.':'Добавь треки в плейлист.');return;}const index=list.findIndex(t=>t.id===currentTrack);playTrack(list[(index+direction+list.length)%list.length].id);}
+function nextTrack(direction) {
+  let list=selectedPlaylist==='favorites'?state.tracks.filter(t=>t.favorite):state.tracks.filter(t=>!selectedPlaylist||t.playlist===selectedPlaylist);
+  if(musicSort!=='new'&&!selectedPlaylist)list=list.filter(t=>t.hit===musicSort);
+  if(!list.length){toast(selectedPlaylist==='favorites'?'В любимых пока нет треков.':'Добавь треки в плейлист.');return;}
+  const playable=list.filter(t=>!t.external);
+  if(!playable.length){toast('В этом списке только треки-ссылки. Открой их по кнопке ↗.');return;}
+  const index=playable.findIndex(t=>t.id===currentTrack);
+  playTrack(playable[(index+direction+playable.length)%playable.length].id);
+}
 $('#playBtn').onclick=()=>currentTrack?playTrack(currentTrack):nextTrack(1);$('#prevTrack').onclick=()=>nextTrack(-1);$('#nextTrack').onclick=()=>nextTrack(1);
 audio.onplay=()=>{$('#playBtn').textContent='Ⅱ';renderMusic();};audio.onpause=()=>{$('#playBtn').textContent='▶';if(!embedPlaying)stopAura();renderMusic();};audio.onended=()=>{stopAura();nextTrack(1);};audio.onerror=()=>{stopAura();toast('Формат аудио не поддерживается или файл повреждён.',true);};
 function musicProgressUpdate(){
@@ -1657,11 +1708,12 @@ document.addEventListener('change',e=>{if(e.target.matches('.hit-select')){const
 $('.preferences').innerHTML=`<div id="themePreferences"></div><div class="preference-row" id="accountPreference"></div><div class="preference-row"><div><strong>Утренний план</strong><span>Показывать напоминание при открытии после 08:00</span></div><button class="toggle" data-setting="morning" aria-label="Утренний план"><i></i></button></div><div class="preference-row"><div><strong>Звук выполнения</strong><span>Короткий сигнал при завершении задачи</span></div><button class="toggle" data-setting="sound" aria-label="Звук выполнения"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать колокольчик напоминаний</span></div><button class="toggle" data-setting="focus" aria-label="Фокус-режим"><i></i></button></div><div id="securityPreferences"></div><div class="preference-row"><div><strong>Хранение данных</strong><span>${CLOUD_ENABLED?'Синхронизируется с облаком Supabase. Аудио и видео — в этом браузере.':'Автоматически в этом браузере. Аудио и видео — в IndexedDB.'}</span></div>${button('export','','Экспорт данных')}</div>`;
 function renderThemePreferences(){
   const box=$('#themePreferences'); if(!box)return;
-  box.innerHTML=`<div class="theme-preferences"><div class="theme-pref-head"><div><strong>Оформление</strong><span>Тема и цвет акцента · фон плавно переливается</span></div><span class="theme-preview-dot" style="--preview:${THEME_PRESETS[state.accent]?.color||'#76a9ff'}"></span></div><div class="theme-pref-grid single"><label class="theme-field">Тема<select id="themeSelect">${Object.entries(THEME_LABELS).map(([key,label])=>`<option value="${key}" ${state.theme===key?'selected':''}>${label}</option>`).join('')}</select></label></div><div class="theme-swatches" role="radiogroup" aria-label="Цвет акцента">${Object.entries(THEME_PRESETS).map(([key,item])=>`<span class="theme-swatch-wrap"><button type="button" class="theme-swatch ${state.accent===key?'active':''}" data-accent="${key}" style="--swatch:${item.color}" title="${escapeHtml(item.label)}" aria-label="${escapeHtml(item.label)}" aria-pressed="${state.accent===key}"></button><span class="theme-swatch-name">${escapeHtml(item.label)}</span></span>`).join('')}</div></div>`;
+  const previewColor=themeAccentColor(state.accent,state.theme);
+  box.innerHTML=`<div class="theme-preferences"><div class="theme-pref-head"><div><strong>Оформление</strong><span>Тема и цвет акцента · фон плавно переливается</span></div><span class="theme-preview-dot" style="--preview:${previewColor}"></span></div><div class="theme-pref-grid single"><label class="theme-field">Тема<select id="themeSelect">${Object.entries(THEME_LABELS).map(([key,label])=>`<option value="${key}" ${state.theme===key?'selected':''}>${label}</option>`).join('')}</select></label></div><div class="theme-swatches" role="radiogroup" aria-label="Цвет акцента">${Object.entries(THEME_PRESETS).map(([key,item])=>`<span class="theme-swatch-wrap"><button type="button" class="theme-swatch ${state.accent===key?'active':''}" data-accent="${key}" style="--swatch:${themeAccentColor(key,state.theme)}" title="${escapeHtml(item.label)}" aria-label="${escapeHtml(item.label)}" aria-pressed="${state.accent===key}"></button><span class="theme-swatch-name">${escapeHtml(item.label)}</span></span>`).join('')}</div></div>`;
   $('#themeSelect').onchange=e=>{
-    state.theme=['dark','black','light'].includes(e.target.value)?e.target.value:'dark';
+    state.theme=e.target.value==='light'?'light':'black';
     applyTheme();persist();renderThemePreferences();
-    logAction('изменил тему',THEME_LABELS[state.theme]||'Тёмная');
+    logAction('изменил тему',THEME_LABELS[state.theme]||'Чёрная');
   };
   $$('.theme-swatch',box).forEach(swatch=>swatch.onclick=()=>{
     state.accent=THEME_PRESETS[swatch.dataset.accent]?swatch.dataset.accent:'blue';
@@ -2033,6 +2085,33 @@ function adminClearLog(){
 $('#adminSearch')?.addEventListener('input',e=>{adminSearch=e.target.value;renderAdminUsers();});
 $('#adminExport')?.addEventListener('click',adminExportDb);
 $('#adminClearLog')?.addEventListener('click',adminClearLog);
+function adminClearSupport(){
+  if(!isOwner(currentAccount))return;
+  const count=adminSupportThreads.length;
+  openEditor('Очистить поддержку',`<p>Удалить все чаты поддержки${count?` (${count})`:''}?</p><p class="help-text">Сообщения и вложения будут удалены без возможности восстановления. Пользователи смогут написать в поддержку заново.</p>`,async()=>{
+    let deleted=count;
+    if(CLOUD_ENABLED){
+      const result=await cloudRpc('sphere_admin_clear_support',{p_id:currentAccount.id,p_token:currentAccount.token});
+      deleted=Math.max(0,+result?.deleted||0);
+    }
+    adminSupportThreads=[];
+    adminSupportCurrent=null;
+    adminSupportAvailable=true;
+    if(adminSupportDialog.open)adminSupportDialog.close();
+    if($('#supportDialog')?.open)$('#supportDialog').close();
+    saveSupportThread(null);
+    supportMessages=[];
+    $('#supportNotifications').innerHTML='';
+    adminNotifySeen={};
+    persistAdminNotifySeen();
+    logAction('очистил чаты поддержки',`Удалено обращений: ${deleted}`);
+    if(CLOUD_ENABLED)await refreshAdminData();
+    renderAdminSupport();
+    updateAdminAlert();
+    toast(deleted?`Чаты поддержки очищены: ${deleted}`:'Чатов поддержки не было');
+  },'Очистить всё');
+}
+$('#adminSupportClear')?.addEventListener('click',adminClearSupport);
 $('#adminSupportRefresh')?.addEventListener('click',()=>{adminLoadedAt=0;refreshAdminData();});
 function openAdminPhotoViewer(){
   const dialog=$('#adminPhotoDialog'),image=$('#adminPhotoImage');
