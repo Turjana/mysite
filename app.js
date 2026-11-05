@@ -937,6 +937,21 @@ function cabinetBackgroundValue(){
 function cabinetVideoValue(){
   return isOwner(currentAccount) ? String(state.profile.cabinetBgVideo||'') : '';
 }
+const CABINET_SHADER_LAYER='idmw3v7s4chuot04689';
+const CABINET_SHADER_DEFAULTS={colorA:'#000000',colorB:'#cd00ff',colorC:'#cd00ff',colorD:'#000000'};
+function normalizeHexColor(value){
+  let v=String(value||'').trim().replace(/^#/,'');
+  if(/^[0-9a-fA-F]{3}$/.test(v))v=v.split('').map(c=>c+c).join('');
+  return /^[0-9a-fA-F]{6}$/.test(v)?'#'+v.toLowerCase():'';
+}
+function cabinetShaderValue(){
+  if(!isOwner(currentAccount))return null;
+  const raw=state.profile.cabinetBgShader;
+  if(!raw||typeof raw!=='object')return null;
+  const colors={};
+  for(const key of Object.keys(CABINET_SHADER_DEFAULTS))colors[key]=normalizeHexColor(raw[key])||CABINET_SHADER_DEFAULTS[key];
+  return colors;
+}
 let cabinetVideoURL='';
 function resetCabinetVideo(video=$('#cabinetBgVideo')){
   if(!video)return;
@@ -954,16 +969,57 @@ async function loadCabinetVideo(key){
     video.onloadedmetadata=()=>{video.currentTime=0;if(document.body.classList.contains('profile-cabinet-video'))video.play().catch(()=>{});};
   }catch{}
 }
+let cabinetShader=null,cabinetShaderColors='',cabinetShaderBusy=false;
+const shaderColorsKey=colors=>colors?`${colors.colorA}|${colors.colorB}|${colors.colorC}|${colors.colorD}`:'';
+function cabinetShaderPreset(colors){return {components:[{type:'FlowingGradient',id:CABINET_SHADER_LAYER,props:{...colors,seed:100,speed:0.5}}]};}
+function destroyCabinetShader(){
+  if(cabinetShader){try{cabinetShader.destroy();}catch{}cabinetShader=null;}
+  cabinetShaderColors='';
+}
+async function applyCabinetShader(colors,active){
+  if(!colors){destroyCabinetShader();return;}
+  const canvas=$('#cabinetBgShader');
+  if(!canvas||!navigator.gpu)return;
+  if(cabinetShader){
+    const key=shaderColorsKey(colors);
+    if(key!==cabinetShaderColors){cabinetShader.update(CABINET_SHADER_LAYER,{...colors});cabinetShaderColors=key;}
+    if(active)cabinetShader.resume();else cabinetShader.pause();
+    return;
+  }
+  if(cabinetShaderBusy)return;
+  cabinetShaderBusy=true;
+  try{
+    const {createShader}=await import('./vendor/shaders-bundle.js');
+    const current=cabinetShaderValue();
+    if(!current||!navigator.gpu)return;
+    const instance=await createShader(canvas,cabinetShaderPreset(current));
+    const fresh=cabinetShaderValue();
+    if(!fresh){try{instance.destroy();}catch{}return;}
+    cabinetShader=instance;
+    cabinetShaderColors=shaderColorsKey(fresh);
+    if(shaderColorsKey(fresh)!==shaderColorsKey(current))instance.update(CABINET_SHADER_LAYER,{...fresh});
+    const stillActive=activeView==='profile'&&!document.body.classList.contains('auth-locked');
+    if(!stillActive)instance.pause();
+  }catch(error){
+    console.warn('Не удалось запустить живой фон кабинета:',error);
+  }finally{
+    cabinetShaderBusy=false;
+  }
+}
 function applyCabinetBackground(){
-  const value=cabinetBackgroundValue(),videoValue=cabinetVideoValue();
+  const value=cabinetBackgroundValue(),videoValue=cabinetVideoValue(),shaderValue=navigator.gpu?cabinetShaderValue():null;
   const active=activeView==='profile'&&!document.body.classList.contains('auth-locked');
   document.documentElement.style.setProperty('--cabinet-bg',value?`url("${value}")`:'none');
   document.body.classList.toggle('profile-cabinet-bg',!!value&&active);
   document.body.classList.toggle('profile-cabinet-video',!!videoValue&&active);
+  document.body.classList.toggle('profile-cabinet-shader',!!shaderValue&&active);
   const video=$('#cabinetBgVideo');
-  if(!videoValue){resetCabinetVideo(video);return;}
-  loadCabinetVideo(videoValue);
-  if(video){if(active)video.play().catch(()=>{});else video.pause();}
+  if(!videoValue){resetCabinetVideo(video);}
+  else{
+    loadCabinetVideo(videoValue);
+    if(video){if(active)video.play().catch(()=>{});else video.pause();}
+  }
+  applyCabinetShader(shaderValue,active);
 }
 let profileSection='tracks';
 const galleryURLs=new Map();
@@ -1117,16 +1173,16 @@ function renderProfile() {
   if(prefix){prefix.hidden=!owner;prefix.textContent=state.profile.status||'✦ В своём ритме';}
   if(!state.profile.photo&&$('#profilePhotoViewer')?.dataset.mode==='photo')hideProfilePhotoViewer();
   const cabinetBtn=$('#profileCabinetBgBtn');
-  if(cabinetBtn){cabinetBtn.hidden=!owner;cabinetBtn.classList.toggle('has-bg',!!(cabinetBackgroundValue()||cabinetVideoValue()));}
+  if(cabinetBtn){cabinetBtn.hidden=!owner;cabinetBtn.classList.toggle('has-bg',!!(cabinetBackgroundValue()||cabinetVideoValue()||cabinetShaderValue()));}
   applyCabinetBackground();
   $('#profileAliasLine').textContent=`@${state.profile.alias||'без_псевдонима'}`;
   $$('.profile-status').forEach(el=>el.remove());
   const favorites=state.tracks.filter(track=>track.favorite);
   const articles=Array.isArray(state.favoriteArticles)?state.favoriteArticles:[];
   const gallery=Array.isArray(state.gallery)?state.gallery:[];
-  $('#favoriteTrackCount').textContent=favorites.length;
-  $('#favoriteArticleCount').textContent=articles.length;
-  $('#galleryCount').textContent=gallery.length;
+  const trackCounter=$('#favoriteTrackCount');if(trackCounter)trackCounter.textContent=favorites.length;
+  const articleCounter=$('#favoriteArticleCount');if(articleCounter)articleCounter.textContent=articles.length;
+  const galleryCounter=$('#galleryCount');if(galleryCounter)galleryCounter.textContent=gallery.length;
   renderProfileHub();
   const stats=$$('.profile-stats b');stats[0].textContent=activityStreak();stats[1].textContent=state.tasks.filter(item=>item.progress===100).length;stats[2].textContent=state.goals.filter(item=>item.progress===100).length;
   $$('.profile-stats span')[2].textContent='целей достигнуто';
@@ -1377,6 +1433,7 @@ function releaseEditorPreview(){
   if(editorPreviewURL){URL.revokeObjectURL(editorPreviewURL);editorPreviewURL='';}
   const preview=$('#profileVideoPreview');
   if(preview){preview.onloadedmetadata=null;preview.removeAttribute('src');preview.load();}
+  releaseShaderPreview();
 }
 function updateVideoHint(duration){
   const hint=$('#videoDurationHint');
@@ -1504,32 +1561,110 @@ function editProfile() {
   initPhotoCrop();
   loadProfileVideoPreview();
 }
+let shaderPreview=null,shaderPreviewBusy=false,shaderPreviewToken=0;
+function releaseShaderPreview(){
+  shaderPreviewToken++;
+  if(shaderPreview){try{shaderPreview.destroy();}catch{}shaderPreview=null;}
+  shaderPreviewBusy=false;
+}
+function shaderFormColors(){
+  const colors={};
+  for(const key of Object.keys(CABINET_SHADER_DEFAULTS)){
+    const text=$(`[name="${key}"]`,editor);
+    colors[key]=normalizeHexColor(text?.value)||CABINET_SHADER_DEFAULTS[key];
+  }
+  return colors;
+}
+function updateShaderPreview(key,hex){
+  if(shaderPreview)shaderPreview.update(CABINET_SHADER_LAYER,{[key]:hex});
+}
+async function startShaderPreview(){
+  const canvas=$('#shaderBgPreview',editor);
+  if(!canvas||shaderPreview||shaderPreviewBusy)return;
+  shaderPreviewBusy=true;
+  const token=++shaderPreviewToken;
+  try{
+    const {createShader}=await import('./vendor/shaders-bundle.js');
+    if(token!==shaderPreviewToken||!editor.open)return;
+    const instance=await createShader(canvas,cabinetShaderPreset(shaderFormColors()));
+    if(token!==shaderPreviewToken){try{instance.destroy();}catch{}return;}
+    shaderPreview=instance;
+  }catch(error){
+    console.warn('Не удалось показать превью градиента:',error);
+  }finally{
+    if(token===shaderPreviewToken)shaderPreviewBusy=false;
+  }
+}
+function shaderBgEditorMarkup(colors){
+  const values=colors||CABINET_SHADER_DEFAULTS;
+  const labels={colorA:'Цвет A',colorB:'Цвет B',colorC:'Цвет C',colorD:'Цвет D'};
+  const cells=Object.keys(CABINET_SHADER_DEFAULTS).map(key=>`<div class="shader-color-cell"><span>${labels[key]}</span><input type="color" name="${key}Pick" value="${values[key]}"><input type="text" name="${key}" value="${values[key]}" maxlength="7" spellcheck="false" aria-label="${labels[key]} HEX"></div>`).join('');
+  return `<label class="checkbox-label"><input type="checkbox" name="shaderBg" ${colors?'checked':''}> Живой градиент «Evening Starling»</label><div class="shader-bg-panel" id="shaderBgPanel" hidden><div class="shader-bg-preview"><canvas id="shaderBgPreview"></canvas></div><div class="shader-color-grid">${cells}</div><p class="help-text" id="shaderBgHint">До четырёх HEX-цветов: #rgb, #rrggbb или без решётки. Градиент заменяет фото/видео-фон и работает на WebGPU.</p></div>`;
+}
+function initShaderBgEditor(){
+  const check=$('[name="shaderBg"]',editor),panel=$('#shaderBgPanel',editor);
+  if(!check||!panel)return;
+  if(!navigator.gpu){
+    check.disabled=true;
+    const hint=$('#shaderBgHint',editor);
+    if(hint)hint.textContent='Ваш браузер не поддерживает WebGPU — живой градиент недоступен.';
+  }
+  for(const key of Object.keys(CABINET_SHADER_DEFAULTS)){
+    const text=$(`[name="${key}"]`,editor),pick=$(`[name="${key}Pick"]`,editor);
+    if(!text||!pick)continue;
+    const cell=text.closest('.shader-color-cell');
+    pick.addEventListener('input',()=>{text.value=pick.value;cell?.classList.remove('invalid');updateShaderPreview(key,pick.value.toLowerCase());});
+    text.addEventListener('input',()=>{
+      const hex=normalizeHexColor(text.value);
+      if(hex){cell?.classList.remove('invalid');pick.value=hex;updateShaderPreview(key,hex);}
+      else cell?.classList.add('invalid');
+    });
+  }
+  const sync=()=>{panel.hidden=!check.checked;if(check.checked)startShaderPreview();};
+  check.addEventListener('change',sync);
+  sync();
+}
 function editCabinetBackground(){
   if(!isOwner(currentAccount)){toast('Фон личного кабинета может менять только владелец.',true);return;}
-  const currentImage=cabinetBackgroundValue(),currentVideo=cabinetVideoValue(),hasBg=!!(currentImage||currentVideo);
-  openEditor('Фон личного кабинета',`<p class="help-text">Это фон всей страницы личного кабинета, а не область рядом с аватаркой. Можно загрузить фото или видео до минуты (до 80 МБ).</p>${field('Фото или видео',input('bg','','file','accept="image/*,video/*"'))}${hasBg?'<label class="checkbox-label"><input type="checkbox" name="removeBg"> Удалить текущий фон</label>':''}`,async data=>{
+  const currentImage=cabinetBackgroundValue(),currentVideo=cabinetVideoValue(),currentShader=cabinetShaderValue();
+  const hasBg=!!(currentImage||currentVideo||currentShader);
+  openEditor('Фон личного кабинета',`<p class="help-text">Это фон всей страницы личного кабинета, а не область рядом с аватаркой. Можно загрузить фото или видео до минуты (до 80 МБ) либо включить живой градиент.</p>${field('Фото или видео',input('bg','','file','accept="image/*,video/*"'))}${shaderBgEditorMarkup(currentShader)}${hasBg?'<label class="checkbox-label"><input type="checkbox" name="removeBg"> Удалить текущий фон</label>':''}`,async data=>{
     const file=data.get('bg');
-    let image=data.has('removeBg')?'':currentImage;
-    let videoKey=data.has('removeBg')?'':currentVideo;
-    if(file?.size){
+    const remove=data.has('removeBg');
+    let image=remove?'':currentImage;
+    let videoKey=remove?'':currentVideo;
+    let shader=remove?null:currentShader;
+    if(data.has('shaderBg')){
+      if(!navigator.gpu)throw new Error('Ваш браузер не поддерживает WebGPU — живой градиент недоступен.');
+      const colors={};
+      for(const key of Object.keys(CABINET_SHADER_DEFAULTS)){
+        const hex=normalizeHexColor(data.get(key));
+        if(!hex)throw new Error('Цвета градиента должны быть в формате HEX, например #cd00ff.');
+        colors[key]=hex;
+      }
+      shader=colors;image='';videoKey='';
+    }else if(file?.size){
       if(file.type.startsWith('image/')){
         image=await imageData(file,1920,.84);
-        videoKey='';
+        videoKey='';shader=null;
       }else if(file.type.startsWith('video/')){
         const info=await videoData(file);
-        videoKey=info.key;
-        image='';
+        videoKey=info.key;image='';shader=null;
       }else{
         throw new Error('Выберите фото или видео.');
       }
+    }else{
+      shader=null;
     }
     if(currentVideo&&currentVideo!==videoKey)audioStore('delete',currentVideo).catch(()=>{});
     if(image)state.profile.cabinetBg=image;else delete state.profile.cabinetBg;
     if(videoKey)state.profile.cabinetBgVideo=videoKey;else delete state.profile.cabinetBgVideo;
-    logAction(videoKey?'установил видео-фон личного кабинета':image?'изменил фон личного кабинета':'убрал фон личного кабинета','');
+    if(shader)state.profile.cabinetBgShader=shader;else delete state.profile.cabinetBgShader;
+    logAction(shader?'установил живой градиент фоном личного кабинета':videoKey?'установил видео-фон личного кабинета':image?'изменил фон личного кабинета':'убрал фон личного кабинета','');
     saveAndRender();applyCabinetBackground();
-    toast(videoKey?'Видео-фон личного кабинета сохранён':image?'Фон личного кабинета сохранён':'Фон личного кабинета удалён');
+    toast(shader?'Живой градиент сохранён':videoKey?'Видео-фон личного кабинета сохранён':image?'Фон личного кабинета сохранён':'Фон личного кабинета удалён');
   },'Сохранить');
+  initShaderBgEditor();
 }
 $$('[data-profile-tool="edit"]').forEach(b=>b.onclick=editProfile);
 $('#profileCabinetBgBtn')?.addEventListener('click',editCabinetBackground);
@@ -2425,7 +2560,7 @@ document.body.insertAdjacentHTML('beforeend', `
 </dialog>
 <dialog id="supportDialog" class="support-dialog card" aria-labelledby="supportTitle">
   <button type="button" class="modal-close" id="supportClose" aria-label="Закрыть">×</button>
-  <header class="support-head"><span class="support-mark">✉</span><div><p class="eyebrow">ПОДДЕРЖКА СФЕРЫ</p><h2 id="supportTitle">Чат с поддержкой</h2><span id="supportSub">Smooktobër · 369turush@gmail.com</span><i class="presence offline" id="supportPresence">Проверяем статус…</i></div></header>
+  <header class="support-head"><span class="support-mark">✉</span><div><h2 id="supportTitle">Чат с поддержкой</h2><i class="presence offline" id="supportPresence">Проверяем статус…</i></div></header>
   <div class="support-identity" id="supportIdentity"></div>
   <div class="support-messages" id="supportMessages"></div>
   <p class="support-status" id="supportStatus" role="alert"></p>
