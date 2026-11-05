@@ -35,17 +35,7 @@ const THEME_PRESETS = {
   black:{label:'Чёрный',color:'#000000'}
 };
 const THEME_LABELS = {black:'Чёрная',light:'Светлая'};
-const TAB_VIEWS = {
-  overview:{label:'Обзор'},
-  tasks:{label:'Мои задачи'},
-  calendar:{label:'Календарь'},
-  music:{label:'Музыка'},
-  news:{label:'Статьи'},
-  goals:{label:'Мои цели'},
-  profile:{label:'Личный кабинет'}
-};
-const NEWS_UNDER_MAINTENANCE = false;
-const emptyState = () => ({version:3,tasks:[],goals:[],playlists:[],tracks:[],favoriteArticles:[],gallery:[],profile:{name:'',alias:'',photo:'',photoX:50,photoY:50,photoScale:1,layout:'card',video:'',videoDuration:0,ownerPrefix:'Владелец',status:'✦ В своём ритме'},habits:[{id:uid(),name:'Утренняя зарядка',days:[]},{id:uid(),name:'Читать 20 минут',days:[]}],note:'',theme:'black',accent:'blue',settings:{sound:false,focus:false,morning:false,volume:.85,tabs:{overview:true,tasks:true,calendar:true,music:true,news:true,goals:true,profile:true}},weather:{city:'Москва',lat:55.7558,lon:37.6173,timezone:'Europe/Moscow',temp:null,code:null,desc:'',updated:0},newsSources:[],newsFeed:[],newsCustom:[],sessions:0});
+const emptyState = () => ({version:3,tasks:[],goals:[],playlists:[],tracks:[],favoriteArticles:[],gallery:[],profile:{name:'',alias:'',photo:'',photoX:50,photoY:50,photoScale:1,layout:'card',video:'',videoDuration:0,ownerPrefix:'Владелец',status:'✦ В своём ритме'},habits:[{id:uid(),name:'Утренняя зарядка',days:[]},{id:uid(),name:'Читать 20 минут',days:[]}],note:'',theme:'black',accent:'blue',settings:{sound:false,focus:false,morning:false,volume:.85},weather:{city:'Москва',lat:55.7558,lon:37.6173,timezone:'Europe/Moscow',temp:null,code:null,desc:'',updated:0},newsSources:[],newsFeed:[],newsCustom:[],sessions:0});
 const readStore = (key, fallback = null) => { try { const value = JSON.parse(localStorage.getItem(key)); return value ?? fallback; } catch { return fallback; } };
 function normalizeState(raw) {
   const base = emptyState(), source = raw && typeof raw === 'object' ? raw : {};
@@ -61,7 +51,6 @@ function normalizeState(raw) {
   if (!['card','row'].includes(next.profile.layout)) next.profile.layout = 'card';
   next.weather = {...base.weather, ...(source.weather || {})};
   next.settings = {...base.settings, ...(source.settings || {})};
-  next.settings.tabs = {...base.settings.tabs, ...(source.settings?.tabs || {})};
   next.favoriteArticles = Array.isArray(source.favoriteArticles) ? source.favoriteArticles : [];
   next.gallery = Array.isArray(source.gallery) ? source.gallery : [];
   if (!['black','light'].includes(next.theme)) next.theme = 'black';
@@ -441,97 +430,8 @@ $('#editorForm').onsubmit = async e => {
 function confirmDelete(label, callback) {
   openEditor('Удаление', `<p>Удалить «${escapeHtml(label)}»?</p>`, () => { callback(); saveAndRender(); }, 'Удалить');
 }
-const configRpc = (name, payload = {}) => cloudRpc(name, payload);
-function readSiteConfigCache(){try{const value=JSON.parse(localStorage.getItem('sphere-site-config'));return value&&typeof value==='object'?{tabs:{},...value,tabs:{...(value.tabs||{})}}:{tabs:{}};}catch{return {tabs:{}};}}
-let siteConfig = readSiteConfigCache();
-let siteConfigLoaded = false;
-function siteTabEnabled(view){
-  const local = state.settings?.tabs?.[view];
-  const global = siteConfig.tabs?.[view];
-  if (global === false) return false;
-  if (global === true) return true;
-  return local !== false;
-}
-function cacheSiteConfig(value){
-  siteConfig={tabs:{},...value,tabs:{...(value?.tabs||{})}};
-  try{localStorage.setItem('sphere-site-config',JSON.stringify(siteConfig));}catch{}
-}
-function fetchSiteConfig() {
-  if (!CLOUD_ENABLED) return Promise.resolve(null);
-  return configRpc('sphere_config_get')
-    .then(data => {
-      if (data && typeof data === 'object') cacheSiteConfig(data);
-      siteConfigLoaded = true;
-      return siteConfig;
-    })
-    .catch(() => null);
-}
-function saveSiteConfig(patch) {
-  if (!CLOUD_ENABLED || !cloudSessionActive() || !isOwner(currentAccount)) return Promise.resolve(null);
-  return configRpc('sphere_config_set',{p_id:currentAccount.id,p_token:currentAccount.token,p_patch:patch})
-    .then(data => {
-      if (data && typeof data === 'object') cacheSiteConfig(data);
-      return siteConfig;
-    })
-    .catch(() => null);
-}
-function applySiteConfig(){
-  applyTabVisibility();
-  if(activeView==='settings'){renderSettings();return;}
-  if(activeView!=='admin'&&activeView!=='maintenance'&&!tabEnabled(activeView))showView(activeView);
-}
-function refreshSiteConfigAndApply(){
-  fetchSiteConfig().then(data=>{if(data)applySiteConfig();});
-}
-function tabEnabled(view){return view==='admin'||view==='settings'||view==='maintenance'||siteTabEnabled(view);}
-function tabLabel(view){return TAB_VIEWS[view]?.label||'Вкладка';}
-function defaultView(){
-  if(tabEnabled('overview'))return 'overview';
-  const first=Object.keys(TAB_VIEWS).find(key=>tabEnabled(key));
-  return first||'settings';
-}
-function applyTabVisibility(){
-  $$('.nav-item[data-view]').forEach(el=>{
-    const view=el.dataset.view;
-    if(view==='admin')return;
-    const off=!tabEnabled(view);
-    el.classList.toggle('tab-off',off);
-    el.title=off?`«${tabLabel(view)}» в техническом режиме`:'';
-  });
-}
-function renderTabSettings(){
-  const box=$('#tabPreferences'); if(!box)return;
-  const canEdit=!CLOUD_ENABLED||isOwner(currentAccount);
-  box.innerHTML=`<div class="preference-block"><div class="preference-block-head"><strong>Вкладки</strong><span>${canEdit?'ON — вкладка активна, OFF — технический режим у всех пользователей':'Разделы настраивает владелец — изменения видны всем пользователям'}</span></div>${Object.entries(TAB_VIEWS).map(([key,item])=>`<div class="preference-row tab-preference"><div><strong>${escapeHtml(item.label)}</strong><span>${tabEnabled(key)?'Вкладка активна':'Технический режим'}</span></div>${canEdit?`<button type="button" class="toggle ${tabEnabled(key)?'on':''}" data-tab-toggle="${key}" aria-label="${escapeHtml(item.label)}" aria-pressed="${tabEnabled(key)}"><i></i></button>`:`<span class="tab-readonly ${tabEnabled(key)?'on':'off'}">${tabEnabled(key)?'ON':'OFF'}</span>`}</div>`).join('')}</div>`;
-  if(!canEdit)return;
-  $$('[data-tab-toggle]',box).forEach(btn=>btn.onclick=async()=>{
-    const key=btn.dataset.tabToggle,next=!tabEnabled(key);
-    state.settings.tabs={...(state.settings.tabs||{}),[key]:next};
-    siteConfig.tabs={...(siteConfig.tabs||{}),[key]:next};
-    persist();renderTabSettings();applyTabVisibility();
-    if(!next&&activeView===key)showView('maintenance',key);
-    if(next&&activeView==='maintenance'&&$('#view-maintenance')?.dataset.tab===key)showView(key);
-    let globalSaved=true;
-    if(CLOUD_ENABLED&&isOwner(currentAccount)){
-      const saved=await saveSiteConfig({tabs:{...(siteConfig.tabs||{})}});
-      globalSaved=!!saved;
-      if(globalSaved)applyTabVisibility();
-    }
-    toast(globalSaved?(next?`Вкладка «${tabLabel(key)}» включена у всех`:`Вкладка «${tabLabel(key)}» в техническом режиме у всех`):'Не удалось сохранить для всех. Проверьте SQL-обновление.',!globalSaved);
-  });
-}
-function showView(view,maintenanceTab='') {
+function showView(view) {
   if (view === 'admin' && !isOwner(currentAccount)) view = 'overview';
-  if (view !== 'admin' && view !== 'settings' && view !== 'maintenance' && !tabEnabled(view)) { maintenanceTab = view; view = 'maintenance'; }
-  if (view === 'maintenance') {
-    const key=maintenanceTab||$('#view-maintenance')?.dataset.tab||'';
-    const section=$('#view-maintenance');
-    if(section)section.dataset.tab=key;
-    const label=tabLabel(key);
-    if($('#tabMaintenanceTitle'))$('#tabMaintenanceTitle').textContent=label;
-    if($('#tabMaintenanceHeading'))$('#tabMaintenanceHeading').textContent=`«${label}» на техническом обслуживании`;
-    if($('#tabMaintenanceText'))$('#tabMaintenanceText').textContent='Включи вкладку в настройках, чтобы вернуть её в работу.';
-  }
   if (activeView === 'admin' && view !== 'admin') markAdminSeen();
   activeView = view;
   if (view !== 'profile') hideProfilePhotoViewer();
@@ -972,6 +872,14 @@ async function loadCabinetVideo(key){
 let cabinetShader=null,cabinetShaderColors='',cabinetShaderBusy=false;
 const shaderColorsKey=colors=>colors?`${colors.colorA}|${colors.colorB}|${colors.colorC}|${colors.colorD}`:'';
 function cabinetShaderPreset(colors){return {components:[{type:'FlowingGradient',id:CABINET_SHADER_LAYER,props:{...colors,seed:100,speed:0.5}}]};}
+let shadersRuntimePromise=null;
+function loadShadersRuntime(){
+  if(shadersRuntimePromise)return shadersRuntimePromise;
+  shadersRuntimePromise=import('./vendor/shaders-bundle.js')
+    .catch(()=>import('https://cdn.jsdelivr.net/npm/shaders@4.0.6/dist/js/bundle.js'))
+    .catch(error=>{shadersRuntimePromise=null;throw error;});
+  return shadersRuntimePromise;
+}
 function destroyCabinetShader(){
   if(cabinetShader){try{cabinetShader.destroy();}catch{}cabinetShader=null;}
   cabinetShaderColors='';
@@ -989,7 +897,7 @@ async function applyCabinetShader(colors,active){
   if(cabinetShaderBusy)return;
   cabinetShaderBusy=true;
   try{
-    const {createShader}=await import('./vendor/shaders-bundle.js');
+    const {createShader}=await loadShadersRuntime();
     const current=cabinetShaderValue();
     if(!current||!navigator.gpu)return;
     const instance=await createShader(canvas,cabinetShaderPreset(current));
@@ -1002,6 +910,7 @@ async function applyCabinetShader(colors,active){
     if(!stillActive)instance.pause();
   }catch(error){
     console.warn('Не удалось запустить живой фон кабинета:',error);
+    toast('Живой градиент недоступен: не удалось загрузить шейдер-рантайм. Проверьте интернет или обновите страницу.',true);
   }finally{
     cabinetShaderBusy=false;
   }
@@ -1584,7 +1493,7 @@ async function startShaderPreview(){
   shaderPreviewBusy=true;
   const token=++shaderPreviewToken;
   try{
-    const {createShader}=await import('./vendor/shaders-bundle.js');
+    const {createShader}=await loadShadersRuntime();
     if(token!==shaderPreviewToken||!editor.open)return;
     const instance=await createShader(canvas,cabinetShaderPreset(shaderFormColors()));
     if(token!==shaderPreviewToken){try{instance.destroy();}catch{}return;}
@@ -2108,7 +2017,7 @@ $('#musicSort').onclick=()=>{const modes=['new','day','week','month','year'];mus
 document.addEventListener('change',e=>{if(e.target.matches('.hit-select')){const track=state.tracks.find(t=>t.id===e.target.dataset.track);if(track){track.hit=e.target.value;persist();renderMusic();}}});
 
 // Settings only expose actions that have a real local implementation.
-$('.preferences').innerHTML=`<div id="themePreferences"></div><div id="tabPreferences"></div><div class="preference-row" id="accountPreference"></div><div class="preference-row"><div><strong>Утренний план</strong><span>Показывать напоминание при открытии после 08:00</span></div><button class="toggle" data-setting="morning" aria-label="Утренний план"><i></i></button></div><div class="preference-row"><div><strong>Звук выполнения</strong><span>Короткий сигнал при завершении задачи</span></div><button class="toggle" data-setting="sound" aria-label="Звук выполнения"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать колокольчик напоминаний</span></div><button class="toggle" data-setting="focus" aria-label="Фокус-режим"><i></i></button></div><div id="securityPreferences"></div><div class="preference-row"><div><strong>Хранение данных</strong><span>${CLOUD_ENABLED?'Синхронизируется с облаком Supabase. Аудио и видео — в этом браузере.':'Автоматически в этом браузере. Аудио и видео — в IndexedDB.'}</span></div>${button('export','','Экспорт данных')}</div>`;
+$('.preferences').innerHTML=`<div id="themePreferences"></div><div class="preference-row" id="accountPreference"></div><div class="preference-row"><div><strong>Утренний план</strong><span>Показывать напоминание при открытии после 08:00</span></div><button class="toggle" data-setting="morning" aria-label="Утренний план"><i></i></button></div><div class="preference-row"><div><strong>Звук выполнения</strong><span>Короткий сигнал при завершении задачи</span></div><button class="toggle" data-setting="sound" aria-label="Звук выполнения"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать колокольчик напоминаний</span></div><button class="toggle" data-setting="focus" aria-label="Фокус-режим"><i></i></button></div><div id="securityPreferences"></div><div class="preference-row"><div><strong>Хранение данных</strong><span>${CLOUD_ENABLED?'Синхронизируется с облаком Supabase. Аудио и видео — в этом браузере.':'Автоматически в этом браузере. Аудио и видео — в IndexedDB.'}</span></div>${button('export','','Экспорт данных')}</div>`;
 function renderThemePreferences(){
   const box=$('#themePreferences'); if(!box)return;
   const previewColor=themeAccentColor(state.accent,state.theme);
@@ -2124,8 +2033,6 @@ function renderThemePreferences(){
 }
 function renderSettings(){
   renderThemePreferences();
-  renderTabSettings();
-  applyTabVisibility();
   $$('[data-setting]').forEach(el=>{el.classList.toggle('on',state.settings[el.dataset.setting]);el.setAttribute('aria-pressed',String(state.settings[el.dataset.setting]));});
   $('#notificationsBtn').hidden=state.settings.focus;
   const security=$('#securityPreferences');
@@ -3148,7 +3055,7 @@ function showAuth(tab = 'login') {
 function applyStateAfterLogin() {
   selectedDate=today();calendarMonth=new Date().getMonth();calendarYear=new Date().getFullYear();
   taskFilter='all';taskSort='manual';selectedPlaylist='';currentTrack='';newsFilter='Все';
-  applyVolumeFromState();applyTheme();applyTabVisibility();showView(defaultView());renderAll();updateClock();
+  applyVolumeFromState();applyTheme();showView('overview');renderAll();updateClock();
   if(state.settings.morning&&new Date().getHours()>=8&&state.lastMorning!==today()){
     state.lastMorning=today();persist();toast(`Твой план на сегодня: ${state.tasks.filter(t=>t.date===today()&&t.progress<100).length} незавершённых задач.`);
   }
@@ -3176,7 +3083,6 @@ async function startSession(account, options = {}) {
   }
   state=cloudState||normalizeState(readStore(STORAGE,null)||emptyState());
   if(cloudState){try{localStorage.setItem(STORAGE,JSON.stringify(state));}catch{}}
-  await fetchSiteConfig();
   const warnings=useCloud?cloudWarnings:unreadWarnings(account.id);
   if(!useCloud){
     const record=adminUserRecord(account.id);record.lastSeen=Date.now();saveAdminDb();
@@ -3403,7 +3309,7 @@ function hydrateCachedSession(){
   try{
     document.body.classList.remove('auth-locked');
     $('#authScreen').hidden=true;
-    applyTheme();applyTabVisibility();renderAll();updateClock();
+    applyTheme();renderAll();updateClock();
   }catch{}
 }
 async function boot(){
@@ -3419,5 +3325,3 @@ async function boot(){
   showAuth(CLOUD_ENABLED||accounts.length?'login':'register');
 }
 boot().catch(error=>{console.error(error);showAuth(CLOUD_ENABLED||accounts.length?'login':'register');});
-setInterval(()=>{if(CLOUD_ENABLED&&currentAccount&&document.visibilityState!=='hidden')refreshSiteConfigAndApply();},60000);
-document.addEventListener('visibilitychange',()=>{if(CLOUD_ENABLED&&currentAccount&&document.visibilityState==='visible')refreshSiteConfigAndApply();});

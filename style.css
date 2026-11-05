@@ -872,18 +872,8 @@ html.source-guard-open,html.source-guard-open body{overflow:hidden!important}
 }
 
 /* ============================================================
-   Технические работы, громкость, присутствие и удаление
-   предупреждений
+   Громкость, присутствие и удаление предупреждений
    ============================================================ */
-.maintenance-card{position:relative;isolation:isolate;overflow:hidden;display:grid;justify-items:center;gap:9px;text-align:center;padding:54px 30px 48px;background:radial-gradient(circle at 16% 14%,color-mix(in srgb,var(--blue) 20%,transparent),transparent 38%),radial-gradient(circle at 84% 84%,color-mix(in srgb,var(--accent-3,var(--blue)) 16%,transparent),transparent 42%),var(--panel)}
-.maintenance-card:before{content:"";position:absolute;inset:0;z-index:-1;background-image:linear-gradient(135deg,color-mix(in srgb,var(--panel2) 76%,var(--blue) 24%),transparent 58%);opacity:.45}
-.maintenance-icon{width:74px;height:74px;display:grid;place-items:center;border-radius:23px;font-size:34px;background:color-mix(in srgb,var(--blue) 16%,var(--panel2));border:1px solid color-mix(in srgb,var(--blue) 35%,var(--line));box-shadow:0 18px 50px color-mix(in srgb,var(--blue) 22%,transparent);margin-bottom:5px}
-.maintenance-card .eyebrow{margin:0;color:color-mix(in srgb,var(--blue) 70%,var(--muted))}
-.maintenance-card h2{font:800 clamp(24px,3.2vw,36px)/1.1 Manrope,sans-serif;letter-spacing:-.9px;margin:0}
-.maintenance-card p:not(.eyebrow){max-width:520px;margin:0;color:var(--muted);font-size:13px;line-height:1.65}
-.maintenance-card .secondary-btn{margin-top:13px;padding:11px 19px}
-html[data-theme="light"] .maintenance-card{background:radial-gradient(circle at 16% 14%,color-mix(in srgb,var(--blue) 13%,transparent),transparent 38%),radial-gradient(circle at 84% 84%,color-mix(in srgb,var(--accent-3,var(--blue)) 10%,transparent),transparent 42%),var(--panel)}
-html[data-theme="black"] .maintenance-card{background:radial-gradient(circle at 16% 14%,color-mix(in srgb,var(--blue) 15%,transparent),transparent 40%),#080808}
 
 /* Громкость трека */
 .volume-control{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;width:52px;margin:16px auto 0;padding:9px 7px;border:1px solid var(--line);border-radius:14px;background:color-mix(in srgb,var(--panel2) 82%,transparent)}
@@ -920,14 +910,11 @@ html[data-theme="light"] .volume-control{background:#fff;border-color:#d9e4f1}
 html[data-theme="light"] .admin-warning-delete{color:#8a6a3f}
 
 @media(max-width:720px){
-  .maintenance-card{padding:38px 20px 34px}
-  .maintenance-icon{width:62px;height:62px;font-size:28px;border-radius:19px}
   .volume-control{margin-top:13px;padding:7px 10px}
   .support-head .presence{font-size:8px;padding:2px 7px}
   .admin-support-meta .presence{font-size:8px}
 }
 @media(prefers-reduced-motion:reduce){
-  .maintenance-card:before{opacity:.35}
   .volume-control button,.admin-warning-delete{transition:none!important}
 }
 
@@ -1065,14 +1052,10 @@ html[data-theme="black"] .card{background:#080808;border-color:#222}
 .preference-block-head{padding:14px 0 6px}
 .preference-block-head strong{display:block;font-size:12px;color:var(--text)}
 .preference-block-head span{display:block;margin-top:3px;font-size:10px;color:var(--muted)}
-.tab-preference{padding:13px 0}
-.tab-preference strong{font-size:12px}
-.tab-preference span{font-size:10px}
-.tab-preference .toggle{flex:none}
 .news-favorite{margin-left:auto;background:none;border:0;color:var(--muted);font-size:16px;line-height:1;padding:2px 3px;border-radius:6px;transition:color .18s ease,transform .18s ease}
 .news-favorite:hover{color:#ec7c9b;transform:scale(1.12)}
 .news-favorite.active{color:#ec7c9b}
-.profile-hub{margin:16px 0 4px;border-top:1px solid var(--line);padding-top:15px}
+.profile-hub-card{grid-column:1 / -1;min-width:0}
 .profile-hub-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:13px}
 .profile-hub-tab{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;color:var(--muted);font-size:10px;font-weight:600;padding:8px 11px;transition:color .18s ease,border-color .18s ease,background .18s ease}
 .profile-hub-tab b{font-size:9px;font-weight:700;color:var(--dim);background:color-mix(in srgb,var(--panel) 70%,transparent);border-radius:20px;padding:2px 6px}
@@ -1091,20 +1074,17 @@ html[data-theme="black"] .card{background:#080808;border-color:#222}
 .profile-hub-open{margin-top:11px}
 .profile-gallery-toolbar{display:flex;justify-content:flex-end;margin-bottom:11px}
 .profile-gallery-toolbar .secondary-btn{padding:8px 12px;font-size:10px}
-.profile-gallery{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
-.profile-gallery-item{position:relative;margin:0;border-radius:10px;overflow:hidden;border:1px solid var(--line);background:var(--panel2);aspect-ratio:1/1}
-.profile-gallery-item img{width:100%;height:100%;object-fit:cover;display:block}
+.profile-gallery{columns:3 180px;column-gap:10px}
+.profile-gallery-item{position:relative;margin:0 0 10px;break-inside:avoid;border-radius:10px;overflow:hidden;border:1px solid var(--line);background:var(--panel2)}
+.profile-gallery-item img{width:100%;height:auto;display:block;cursor:zoom-in}
 .profile-gallery-remove{position:absolute;top:6px;right:6px;width:23px;height:23px;display:grid;place-items:center;border-radius:50%;background:#000000b8;color:#fff;font-size:14px;line-height:1;backdrop-filter:blur(4px)}
 .profile-gallery-remove:hover{background:#c0392b}
-.profile-card.row-view .profile-hub{grid-column:1}
 @media(max-width:720px){
-  .profile-gallery{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .profile-gallery{columns:2 150px}
   .profile-hub-tabs{gap:5px}
   .profile-hub-tab{flex:1 1 auto;justify-content:center;font-size:9.5px;padding:8px 9px}
 }
-.nav-item.tab-off{opacity:.62}
-.nav-item.tab-off:after{content:"ТО";margin-left:auto;font-size:8px;font-weight:700;letter-spacing:.06em;color:#c8a45c;border:1px solid #6b5730;background:#2a2318;border-radius:5px;padding:2px 4px;line-height:1}
-html[data-theme="light"] .nav-item.tab-off:after{color:#8a6417;border-color:#e2cf9d;background:#fbf3dd}
+html[data-theme="light"] .profile-hub-tab b{background:#e7edf5}
 html[data-theme="light"] .profile-owner:not([hidden]){animation-name:owner-sparkle-light;color:#0f9f74}
 @keyframes owner-sparkle-light{
   0%,100%{color:#12855f;text-shadow:0 0 4px rgba(18,133,95,.25),0 0 10px rgba(18,133,95,.12);opacity:.9}
