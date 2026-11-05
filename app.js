@@ -24,18 +24,28 @@ const priorityLabels = {urgent:'Срочный',medium:'Средний',low:'Н�
 const priorityRank = {urgent:0,medium:1,low:2};
 const normalizePriority = value => ({blue:'low',orange:'medium',purple:'urgent'}[value] || (priorityLabels[value] ? value : 'medium'));
 const THEME_PRESETS = {
-  blue:{label:'Лазурный',color:'#76a9ff'},
-  violet:{label:'Фиолетовый',color:'#a78bff'},
-  mint:{label:'Мятный',color:'#63e0c0'},
-  sunset:{label:'Закатный',color:'#ff936b'},
-  rose:{label:'Розовый',color:'#ff7fae'},
-  gold:{label:'Золотой',color:'#f0c96a'},
-  ice:{label:'Ледяной',color:'#72d6ff'},
-  lime:{label:'Лаймовый',color:'#b8e36a'}
+  blue:{label:'Лазурный',darkLabel:'Тёмно-лазурный',color:'#76a9ff'},
+  violet:{label:'Фиолетовый',darkLabel:'Тёмно-фиолетовый',color:'#a78bff'},
+  mint:{label:'Мятный',darkLabel:'Тёмно-мятный',color:'#63e0c0'},
+  sunset:{label:'Закатный',darkLabel:'Тёмно-оранжевый',color:'#ff936b'},
+  rose:{label:'Розовый',darkLabel:'Тёмно-розовый',color:'#ff7fae'},
+  gold:{label:'Золотой',darkLabel:'Тёмно-золотой',color:'#f0c96a'},
+  ice:{label:'Ледяной',darkLabel:'Тёмно-ледяной',color:'#72d6ff'},
+  lime:{label:'Лаймовый',darkLabel:'Тёмно-лаймовый',color:'#b8e36a'},
+  black:{label:'Чёрный',color:'#000000'}
 };
 const THEME_LABELS = {black:'Чёрная',light:'Светлая'};
-const NEWS_UNDER_MAINTENANCE = true;
-const emptyState = () => ({version:3,tasks:[],goals:[],playlists:[],tracks:[],profile:{name:'',alias:'',photo:'',photoX:50,photoY:50,photoScale:1,layout:'card',video:'',videoDuration:0,ownerPrefix:'Владелец',status:'✦ В своём ритме'},habits:[{id:uid(),name:'Утренняя зарядка',days:[]},{id:uid(),name:'Читать 20 минут',days:[]}],note:'',theme:'black',accent:'blue',settings:{sound:false,focus:false,morning:false,volume:.85},weather:{city:'Москва',lat:55.7558,lon:37.6173,timezone:'Europe/Moscow',temp:null,code:null,desc:'',updated:0},newsSources:[],newsFeed:[],newsCustom:[],sessions:0});
+const TAB_VIEWS = {
+  overview:{label:'Обзор'},
+  tasks:{label:'Мои задачи'},
+  calendar:{label:'Календарь'},
+  music:{label:'Музыка'},
+  news:{label:'Статьи'},
+  goals:{label:'Мои цели'},
+  profile:{label:'Личный кабинет'}
+};
+const NEWS_UNDER_MAINTENANCE = false;
+const emptyState = () => ({version:3,tasks:[],goals:[],playlists:[],tracks:[],favoriteArticles:[],gallery:[],profile:{name:'',alias:'',photo:'',photoX:50,photoY:50,photoScale:1,layout:'card',video:'',videoDuration:0,ownerPrefix:'Владелец',status:'✦ В своём ритме'},habits:[{id:uid(),name:'Утренняя зарядка',days:[]},{id:uid(),name:'Читать 20 минут',days:[]}],note:'',theme:'black',accent:'blue',settings:{sound:false,focus:false,morning:false,volume:.85,tabs:{overview:true,tasks:true,calendar:true,music:true,news:true,goals:true,profile:true}},weather:{city:'Москва',lat:55.7558,lon:37.6173,timezone:'Europe/Moscow',temp:null,code:null,desc:'',updated:0},newsSources:[],newsFeed:[],newsCustom:[],sessions:0});
 const readStore = (key, fallback = null) => { try { const value = JSON.parse(localStorage.getItem(key)); return value ?? fallback; } catch { return fallback; } };
 function normalizeState(raw) {
   const base = emptyState(), source = raw && typeof raw === 'object' ? raw : {};
@@ -51,6 +61,9 @@ function normalizeState(raw) {
   if (!['card','row'].includes(next.profile.layout)) next.profile.layout = 'card';
   next.weather = {...base.weather, ...(source.weather || {})};
   next.settings = {...base.settings, ...(source.settings || {})};
+  next.settings.tabs = {...base.settings.tabs, ...(source.settings?.tabs || {})};
+  next.favoriteArticles = Array.isArray(source.favoriteArticles) ? source.favoriteArticles : [];
+  next.gallery = Array.isArray(source.gallery) ? source.gallery : [];
   if (!['black','light'].includes(next.theme)) next.theme = 'black';
   if (!THEME_PRESETS[next.accent]) next.accent = 'blue';
   next.newsSources = Array.isArray(source.newsSources) ? source.newsSources : [];
@@ -78,6 +91,8 @@ const ADMIN_SEEN_KEY = 'sphere-admin-seen';
 const ADMIN_NOTIFY_KEY = 'sphere-admin-notify';
 const SUPPORT_THREAD_KEY = 'sphere-support-thread';
 const ADMIN_LOG_LIMIT = 600;
+const HIDDEN_LOG_ACTIONS = new Set(['переключил тему','изменил тему','изменил цвет темы','изменил громкость','открыл профиль пользователя']);
+const visibleLogEvents = events => (Array.isArray(events)?events:[]).filter(event=>!HIDDEN_LOG_ACTIONS.has(String(event?.action||'')));
 const SUPPORT_FILE_LIMIT = 2 * 1024 * 1024;
 let adminSeenAt = +localStorage.getItem(ADMIN_SEEN_KEY) || 0;
 let adminSupportThreads = [], adminSupportCurrent = null, adminSupportAvailable = true, adminSupportPollTimer = 0;
@@ -125,6 +140,7 @@ function syncAdminDb() {
   if (changed) saveAdminDb();
 }
 function logAction(action, details = '', targetId = '') {
+  if (HIDDEN_LOG_ACTIONS.has(String(action || ''))) return;
   try {
     const actor = currentAccount ? {
       id: currentAccount.id,
@@ -176,7 +192,7 @@ function adminUnreadCount() {
   if (!isOwner(currentAccount)) return 0;
   const seen = +adminSeenAt || 0;
   const ownId = String(currentAccount?.id || '');
-  const events = (CLOUD_ENABLED ? adminEvents : adminDb.events).filter(event => {
+  const events = visibleLogEvents(CLOUD_ENABLED ? adminEvents : adminDb.events).filter(event => {
     const actorId = String(event?.actor?.id || '');
     return (+event?.at || 0) > seen && actorId !== ownId;
   });
@@ -425,8 +441,46 @@ $('#editorForm').onsubmit = async e => {
 function confirmDelete(label, callback) {
   openEditor('Удаление', `<p>Удалить «${escapeHtml(label)}»?</p>`, () => { callback(); saveAndRender(); }, 'Удалить');
 }
-function showView(view) {
+function tabEnabled(view){return view==='admin'||view==='settings'||view==='maintenance'||state.settings?.tabs?.[view]!==false;}
+function tabLabel(view){return TAB_VIEWS[view]?.label||'Вкладка';}
+function defaultView(){
+  if(tabEnabled('overview'))return 'overview';
+  const first=Object.keys(TAB_VIEWS).find(key=>tabEnabled(key));
+  return first||'settings';
+}
+function applyTabVisibility(){
+  $$('.nav-item[data-view]').forEach(el=>{
+    const view=el.dataset.view;
+    if(view==='admin')return;
+    const off=!tabEnabled(view);
+    el.classList.toggle('tab-off',off);
+    el.title=off?`«${tabLabel(view)}» в техническом режиме`:'';
+  });
+}
+function renderTabSettings(){
+  const box=$('#tabPreferences'); if(!box)return;
+  box.innerHTML=`<div class="preference-block"><div class="preference-block-head"><strong>Вкладки</strong><span>Включай нужные разделы или переводи их в технический режим</span></div>${Object.entries(TAB_VIEWS).map(([key,item])=>`<div class="preference-row tab-preference"><div><strong>${escapeHtml(item.label)}</strong><span>${tabEnabled(key)?'Вкладка активна':'Технический режим'}</span></div><button type="button" class="toggle ${tabEnabled(key)?'on':''}" data-tab-toggle="${key}" aria-label="${escapeHtml(item.label)}" aria-pressed="${tabEnabled(key)}"><i></i></button></div>`).join('')}</div>`;
+  $$('[data-tab-toggle]',box).forEach(btn=>btn.onclick=()=>{
+    const key=btn.dataset.tabToggle,next=!tabEnabled(key);
+    state.settings.tabs={...(state.settings.tabs||{}),[key]:next};
+    persist();renderTabSettings();applyTabVisibility();
+    if(!next&&activeView===key)showView('maintenance',key);
+    if(next&&activeView==='maintenance'&&$('#view-maintenance')?.dataset.tab===key)showView(key);
+    toast(next?`Вкладка «${tabLabel(key)}» включена`:`Вкладка «${tabLabel(key)}» в техническом режиме`);
+  });
+}
+function showView(view,maintenanceTab='') {
   if (view === 'admin' && !isOwner(currentAccount)) view = 'overview';
+  if (view !== 'admin' && view !== 'settings' && view !== 'maintenance' && !tabEnabled(view)) { maintenanceTab = view; view = 'maintenance'; }
+  if (view === 'maintenance') {
+    const key=maintenanceTab||$('#view-maintenance')?.dataset.tab||'';
+    const section=$('#view-maintenance');
+    if(section)section.dataset.tab=key;
+    const label=tabLabel(key);
+    if($('#tabMaintenanceTitle'))$('#tabMaintenanceTitle').textContent=label;
+    if($('#tabMaintenanceHeading'))$('#tabMaintenanceHeading').textContent=`«${label}» на техническом обслуживании`;
+    if($('#tabMaintenanceText'))$('#tabMaintenanceText').textContent='Включи вкладку в настройках, чтобы вернуть её в работу.';
+  }
   if (activeView === 'admin' && view !== 'admin') markAdminSeen();
   activeView = view;
   applyCabinetBackground();
@@ -586,6 +640,10 @@ function themeAccentColor(key, theme = state.theme) {
   const color = THEME_PRESETS[key]?.color || THEME_PRESETS.blue.color;
   return theme === 'black' ? darkenThemeColor(color) : color;
 }
+function themeAccentLabel(key, theme = state.theme) {
+  const preset = THEME_PRESETS[key] || THEME_PRESETS.blue;
+  return theme === 'black' ? (preset.darkLabel || preset.label) : preset.label;
+}
 function themeHsl(value) {
   const [r,g,b]=themeRgb(value).map(channel=>channel/255), max=Math.max(r,g,b), min=Math.min(r,g,b), lightness=(max+min)/2;
   let hue=0, saturation=0;
@@ -643,7 +701,6 @@ function applyTheme() {
 $('#themeBtn').onclick = () => {
   state.theme = state.theme === 'light' ? 'black' : 'light';
   applyTheme(); renderThemePreferences(); persist();
-  logAction('переключил тему', THEME_LABELS[state.theme] || 'Чёрная');
 };
 applyTheme();
 
@@ -856,6 +913,74 @@ function applyCabinetBackground(){
   loadCabinetVideo(videoValue);
   if(video){if(active)video.play().catch(()=>{});else video.pause();}
 }
+let profileSection='tracks';
+const galleryURLs=new Map();
+function articleKey(item){return String(item?.url||item?.id||item?.title||'');}
+function favoriteArticle(item){
+  const key=articleKey(item);
+  return (state.favoriteArticles||[]).some(entry=>articleKey(entry)===key);
+}
+function toggleFavoriteArticle(item){
+  const key=articleKey(item);
+  const list=Array.isArray(state.favoriteArticles)?state.favoriteArticles:[];
+  if(list.some(entry=>articleKey(entry)===key)){
+    state.favoriteArticles=list.filter(entry=>articleKey(entry)!==key);
+    toast('Статья убрана из любимых');
+  }else{
+    state.favoriteArticles=[{id:item.id||uid(),title:item.title||'Без названия',description:item.description||'',image:item.image||'',url:item.url||'',source:item.source||'',category:item.category||'Другое',created:Date.now()},...list].slice(0,120);
+    toast('Статья добавлена в любимые');
+  }
+  persist();renderProfile();renderNews();
+}
+function renderProfileHub(){
+  const panel=$('#profileHubPanel'); if(!panel)return;
+  $$('.profile-hub-tab').forEach(tab=>{const active=tab.dataset.profileSection===profileSection;tab.classList.toggle('active',active);tab.setAttribute('aria-selected',String(active));});
+  if(profileSection==='articles'){
+    const articles=Array.isArray(state.favoriteArticles)?state.favoriteArticles:[];
+    panel.innerHTML=articles.length?`<div class="profile-hub-list">${articles.map(item=>`<div class="profile-hub-item"><div class="profile-hub-copy"><strong>${escapeHtml(item.title||'Без названия')}</strong><small>${escapeHtml(item.source||'Источник')}${item.category?` · ${escapeHtml(item.category)}`:''}</small></div><div class="profile-hub-actions">${item.url?`<a class="row-btn" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer" title="Открыть статью">↗</a>`:''}<button type="button" class="row-btn" data-remove-article="${escapeHtml(articleKey(item))}" title="Убрать из любимых">×</button></div></div>`).join('')}</div>`:'<p class="empty-state">Любимых статей пока нет. Нажми ♥ на карточке в разделе «Статьи».</p>';
+    return;
+  }
+  if(profileSection==='gallery'){
+    const gallery=Array.isArray(state.gallery)?state.gallery:[];
+    panel.innerHTML=`<div class="profile-gallery-toolbar"><button type="button" class="secondary-btn" id="addGalleryPhoto">＋ Добавить фото</button><input type="file" id="galleryPhotoInput" accept="image/*" multiple hidden></div>${gallery.length?`<div class="profile-gallery">${gallery.map(photo=>`<figure class="profile-gallery-item"><img ${photo.key?`data-gallery-key="${escapeHtml(photo.key)}"`:''} ${photo.src?`src="${escapeHtml(photo.src)}"`:''} alt="${escapeHtml(photo.title||'Фото галереи')}"><button type="button" class="profile-gallery-remove" data-remove-gallery="${escapeHtml(photo.id)}" title="Удалить фото">×</button></figure>`).join('')}</div>`:'<p class="empty-state">Галерея пока пуста. Добавь фотографии, которые тебе нравятся.</p>'}`;
+    $$('[data-gallery-key]',panel).forEach(async img=>{
+      const key=img.dataset.galleryKey;
+      try{
+        let url=galleryURLs.get(key);
+        if(!url){
+          const blob=await audioStore('get',key);
+          if(!blob)return;
+          url=URL.createObjectURL(blob);
+          galleryURLs.set(key,url);
+        }
+        if(img.isConnected)img.src=url;
+      }catch{}
+    });
+    const addBtn=$('#addGalleryPhoto'),input=$('#galleryPhotoInput');
+    if(addBtn&&input){addBtn.onclick=()=>input.click();input.onchange=async()=>{
+      const files=[...input.files].filter(file=>file.type.startsWith('image/'));
+      if(!files.length)return;
+      if((state.gallery||[]).length+files.length>40){toast('В галерее может быть не больше 40 фото.',true);return;}
+      let added=0;
+      for(const file of files.slice(0,40)){
+        if(file.size>15*1024*1024){toast(`Файл «${file.name}» больше 15 МБ.`,true);continue;}
+        try{
+          const id=uid(),key=`gallery-${id}`;
+          await audioStore('put',key,file);
+          state.gallery=[{id,key,title:file.name.replace(/\.[^.]+$/,''),created:Date.now()},...(state.gallery||[])];
+          added++;
+        }catch{}
+      }
+      if(!added)return;
+      persist();renderProfile();toast(added===1?'Фото добавлено в галерею':`Добавлено фото: ${added}`);
+    };}
+    return;
+  }
+  const favorites=state.tracks.filter(track=>track.favorite);
+  panel.innerHTML=favorites.length?`<div class="profile-hub-list">${favorites.map(track=>`<button type="button" class="profile-hub-item profile-hub-track" data-action="track-play" data-id="${track.id}"><span class="profile-hub-note">♪</span><div class="profile-hub-copy"><strong>${escapeHtml(track.title)}</strong><small>${escapeHtml(track.artist||'Исполнитель не указан')}</small></div><span class="row-btn">▶</span></button>`).join('')}</div><button type="button" class="text-btn profile-hub-open" data-open-favorites>Открыть плейлист любимых →</button>`:'<p class="empty-state">Любимых треков пока нет. Отметь трек сердечком в разделе «Музыка».</p>';
+  const open=$('.profile-hub-open',panel);
+  if(open)open.onclick=()=>{showView('music');selectedPlaylist='favorites';renderMusic();};
+}
 function renderProfile() {
   $$('.avatar,.profile-avatar').forEach(el=>el.innerHTML=avatarMarkup());
   $$('.avatar img,.profile-avatar img').forEach(img=>{img.style.objectPosition=`${state.profile.photoX??50}% ${state.profile.photoY??50}%`;img.style.transform=`scale(${state.profile.photoScale||1})`;});
@@ -875,8 +1000,12 @@ function renderProfile() {
   $('#profileAliasLine').textContent=`@${state.profile.alias||'без_псевдонима'}`;
   $$('.profile-status').forEach(el=>el.remove());
   const favorites=state.tracks.filter(track=>track.favorite);
-  $('#favoriteTrackCount').textContent=`${favorites.length} сохранено`;
-  $('#profileFavorites').innerHTML=favorites.slice(0,3).map(track=>`<button class="profile-favorite" data-action="track-play" data-id="${track.id}"><span>♪</span><strong>${escapeHtml(track.title)}</strong><small>${escapeHtml(track.artist||'Исполнитель не указан')}</small></button>`).join('');
+  const articles=Array.isArray(state.favoriteArticles)?state.favoriteArticles:[];
+  const gallery=Array.isArray(state.gallery)?state.gallery:[];
+  $('#favoriteTrackCount').textContent=favorites.length;
+  $('#favoriteArticleCount').textContent=articles.length;
+  $('#galleryCount').textContent=gallery.length;
+  renderProfileHub();
   const stats=$$('.profile-stats b');stats[0].textContent=activityStreak();stats[1].textContent=state.tasks.filter(item=>item.progress===100).length;stats[2].textContent=state.goals.filter(item=>item.progress===100).length;
   $$('.profile-stats span')[2].textContent='целей достигнуто';
   const monday=new Date();monday.setDate(monday.getDate()-(monday.getDay()+6)%7);
@@ -898,11 +1027,6 @@ function newsAllItems(){
   });
 }
 function renderNews() {
-  if(NEWS_UNDER_MAINTENANCE){
-    $('#newsWorkspace')?.setAttribute('hidden','');
-    $('#newsMaintenance')?.removeAttribute('hidden');
-    return;
-  }
   const all=newsAllItems();
   const select=$('#newsCategorySelect');
   if(select){
@@ -918,7 +1042,7 @@ function renderNews() {
     sourceSelect.value=newsSource;
   }
   const items=all.filter(item=>(newsFilter==='Все'||item.category===newsFilter)&&(newsSource==='Все'||item.source===newsSource)).slice(0,50);
-  $('#newsList').innerHTML=items.length?items.map((item,index)=>`<article class="news-card card ${index===0?'featured-news':''}"><div class="article-icon ${item.image?'news-thumb':' '+(index%2?'blue':'orange')}" ${item.image?`style="background-image:url('${escapeHtml(item.image)}')"`:''}>${item.image?'':(index%2?'⌁':'✦')}</div><div class="news-content"><div class="news-meta"><span>${escapeHtml(String(item.category||'Другое').toUpperCase())}</span><small>${escapeHtml(item.source||'Источник')}</small></div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.description||'')}</p><a href="${escapeHtml(item.url||'#')}" target="_blank" rel="noopener noreferrer">Читать источник →</a></div></article>`).join(''):empty('По выбранным фильтрам новостей нет. Добавь источник или новость по ссылке.');
+  $('#newsList').innerHTML=items.length?items.map((item,index)=>`<article class="news-card card ${index===0?'featured-news':''}"><div class="article-icon ${item.image?'news-thumb':' '+(index%2?'blue':'orange')}" ${item.image?`style="background-image:url('${escapeHtml(item.image)}')"`:''}>${item.image?'':(index%2?'⌁':'✦')}</div><div class="news-content"><div class="news-meta"><span>${escapeHtml(String(item.category||'Другое').toUpperCase())}</span><small>${escapeHtml(item.source||'Источник')}</small><button type="button" class="news-favorite ${favoriteArticle(item)?'active':''}" data-news-favorite="${escapeHtml(articleKey(item))}" title="${favoriteArticle(item)?'Убрать из любимых статей':'Добавить в любимые статьи'}" aria-pressed="${favoriteArticle(item)}">${favoriteArticle(item)?'♥':'♡'}</button></div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.description||'')}</p><a href="${escapeHtml(item.url||'#')}" target="_blank" rel="noopener noreferrer">Читать источник →</a></div></article>`).join(''):empty('По выбранным фильтрам статей нет. Добавь источник или статью по ссылке.');
   const count=(state.newsSources||[]).length;
   $('#manageSources').textContent=count?`Мои источники · ${count}`:'Мои источники';
 }
@@ -1223,6 +1347,7 @@ function editProfile() {
     const name=String(data.get('name')).trim();if(!name)throw new Error('Введите имя.');
     const newAlias=String(data.get('alias')).trim().replace(/^@/,'');
     if(!newAlias)throw new Error('Введите псевдоним.');
+    const previousName=state.profile.name||'',previousAlias=state.profile.alias||'';
     if(CLOUD_ENABLED&&currentAccount&&(normalizeAlias(newAlias)!==normalizeAlias(currentAccount.alias)||name!==currentAccount.name)){
       try{
         const updated=await cloudRpc('sphere_account_update',{p_id:currentAccount.id,p_token:currentAccount.token,p_name:name,p_alias:newAlias});
@@ -1250,7 +1375,8 @@ function editProfile() {
     const newStatus=ownerAccount?(String(data.get('status')).trim()||'✦ В своём ритме'):state.profile.status;
     state.profile={...state.profile,name,alias:newAlias,status:newStatus,photo,photoX:photo?cropState.x:50,photoY:photo?cropState.y:50,photoScale:photo?cropState.scale:1,video,videoStart:0,videoEnd:0,videoDuration:video?videoDuration:0};
     if(previousVideo&&previousVideo!==video)audioStore('delete',previousVideo).catch(()=>{});
-    logAction('обновил профиль',name);
+    if(previousAlias&&normalizeAlias(newAlias)!==normalizeAlias(previousAlias))logAction('изменил псевдоним',`@${normalizeAlias(previousAlias)} → @${normalizeAlias(newAlias)}`,currentAccount?.id||'');
+    if(previousName&&name!==previousName)logAction('изменил ник',`${previousName} → ${name}`,currentAccount?.id||'');
     saveAndRender();toast('Профиль сохранён');
   });
   initPhotoCrop();
@@ -1303,7 +1429,35 @@ function renderHabits() {
   $('.habit-card').insertAdjacentHTML('beforeend',state.habits.length?state.habits.map(h=>`<div class="habit-row"><span class="habit-icon blue">◒</span><div><strong>${escapeHtml(h.name)}</strong><span>${h.days.length} дней отмечено</span></div><button class="habit-check ${h.days.includes(today())?'done':''}" data-action="habit-toggle" data-id="${h.id}" aria-label="${escapeHtml(h.name)}" aria-pressed="${h.days.includes(today())}">${h.days.includes(today())?'✓':'○'}</button></div>`).join(''):empty('Добавь полезную привычку.'));
 }
 $('#habitMore').onclick=()=>openEditor('Мои привычки',state.habits.map(h=>`<div class="manage-row">${escapeHtml(h.name)}${button('habit-delete',h.id,'Удалить','text-btn')}</div>`).join('')+field('Новая привычка',input('name','','text','required maxlength="100"')),data=>{const name=String(data.get('name')).trim();if(!name)throw new Error('Введите название.');const habit={id:uid(),name,days:[]};state.habits.push(habit);logAction('добавил привычку',name,habit.id);saveAndRender();},'Добавить');
-$('#openFavorites').onclick=()=>{showView('music');selectedPlaylist='favorites';renderMusic();};
+document.addEventListener('click',e=>{
+  const hubTab=e.target.closest('[data-profile-section]');
+  if(hubTab){profileSection=hubTab.dataset.profileSection;renderProfileHub();return;}
+  const removeArticle=e.target.closest('[data-remove-article]');
+  if(removeArticle){
+    const key=removeArticle.dataset.removeArticle;
+    state.favoriteArticles=(state.favoriteArticles||[]).filter(item=>articleKey(item)!==key);
+    persist();renderProfile();renderNews();toast('Статья убрана из любимых');return;
+  }
+  const removePhoto=e.target.closest('[data-remove-gallery]');
+  if(removePhoto){
+    const id=removePhoto.dataset.removeGallery;
+    const photo=(state.gallery||[]).find(item=>item.id===id);
+    if(photo?.key){
+      audioStore('delete',photo.key).catch(()=>{});
+      const url=galleryURLs.get(photo.key);
+      if(url){URL.revokeObjectURL(url);galleryURLs.delete(photo.key);}
+    }
+    state.gallery=(state.gallery||[]).filter(item=>item.id!==id);
+    persist();renderProfile();toast('Фото удалено из галереи');return;
+  }
+  const newsFavorite=e.target.closest('[data-news-favorite]');
+  if(newsFavorite){
+    const key=newsFavorite.dataset.newsFavorite;
+    const item=newsAllItems().find(entry=>articleKey(entry)===key);
+    if(item)toggleFavoriteArticle(item);
+    return;
+  }
+});
 $('#noteBtn').onclick=()=>openEditor('Быстрая заметка',field('Твои идеи',`<textarea name="note" rows="10" maxlength="20000">${escapeHtml(state.note)}</textarea>`),data=>{state.note=String(data.get('note'));logAction('сохранил заметку',`${state.note.length} символов`);persist();toast('Заметка сохранена');});
 $('#quoteBtn').onclick=()=>{ const index=(Number($('#quoteBtn').dataset.index||0)+1)%compliments.length;$('#quoteBtn').dataset.index=index;$('.quote-card p').textContent=compliments[index];$('.quote-card>span').textContent='— Напоминание себе'; };
 
@@ -1371,7 +1525,7 @@ function updateVolumeUI(){
 function applyVolumeFromState(){audio.volume=volumeFromState();lastAudibleVolume=audio.volume||.85;updateVolumeUI();}
 function commitVolume(){state.settings.volume=audio.volume;persist();}
 volumeSlider?.addEventListener('input',()=>{audio.volume=Math.min(1,Math.max(0,+volumeSlider.value/100));if(audio.volume>0)lastAudibleVolume=audio.volume;updateVolumeUI();});
-volumeSlider?.addEventListener('change',()=>{commitVolume();logAction('изменил громкость',`${Math.round(audio.volume*100)}%`);});
+volumeSlider?.addEventListener('change',()=>{commitVolume();});
 muteBtn?.addEventListener('click',()=>{if(audio.volume>0){lastAudibleVolume=audio.volume;audio.volume=0;}else audio.volume=lastAudibleVolume||volumeFromState()||.85;commitVolume();updateVolumeUI();});
 let audioContext=null,analyserNode=null,mediaSourceNode=null,mediaStream=null,captureTimer=0,fakeAuraTimer=0,vizRAF=0,vizFreq=null,vizBpm=0,vizBeatAvg=0,vizLastOnset=0,vizOnsets=[],vizSilent=0,vizBeatPulse=0,vizEnergy=0;
 function trackHash(track){return [...String(track?.id||track?.title||'')].reduce((hash,char)=>((hash<<5)-hash+char.charCodeAt(0))|0,0)>>>0;}
@@ -1491,7 +1645,7 @@ function renderMusic() {
   list=[...list].sort((a,b)=>b.created-a.created);
   const playlist=state.playlists.find(p=>p.id===selectedPlaylist);
   $('#trackCount').textContent=`${list.length} треков`;
-  $('#trackList').innerHTML=(selectedPlaylist?`<div class="manage-row"><strong>${escapeHtml(selectedPlaylist==='favorites'?'Любимые треки':playlist?.name||'')}</strong>${button('playlist-all','','Все плейлисты','text-btn')}</div>`:'')+(list.length?list.map(t=>`<div class="track-row" data-track-row="${t.id}">${coverMarkup(t)}<div class="track-info"><div class="task-copy"><strong>${escapeHtml(t.title)}</strong><small>${escapeHtml(t.artist||'Исполнитель не указан')}${t.service?` · ${escapeHtml(t.service)}`:''}</small></div><div class="track-controls"><select class="hit-select" data-track="${t.id}" aria-label="Категория ${escapeHtml(t.title)}">${Object.entries(hits).map(([key,label])=>`<option value="${key}" ${key===t.hit?'selected':''}>${label}</option>`).join('')}</select>${t.external?`<a class="row-btn track-source" href="${escapeHtml(t.sourceUrl)}" target="_blank" rel="noopener noreferrer" title="Открыть во ВКонтакте">↗</a>`:button('track-play',t.id,currentTrack===t.id&&(embedPlaying||!audio.paused)?'Ⅱ':'▶','row-btn')}${!t.external&&t.sourceUrl?`<a class="row-btn track-source" href="${escapeHtml(t.sourceUrl)}" target="_blank" rel="noopener noreferrer" title="Открыть источник">↗</a>`:''}${button('track-edit',t.id,'✎','row-btn')}${button('track-delete',t.id,'×','row-btn')}</div></div></div>`).join(''):(selectedPlaylist==='favorites'?empty('Ты пока не отметил ни одного трека сердечком.'):''));
+  $('#trackList').innerHTML=(selectedPlaylist?`<div class="manage-row"><strong>${escapeHtml(selectedPlaylist==='favorites'?'Любимые треки':playlist?.name||'')}</strong>${button('playlist-all','','Все плейлисты','text-btn')}</div>`:'')+(list.length?list.map(t=>`<div class="track-row" data-track-row="${t.id}">${coverMarkup(t)}<div class="track-info"><div class="task-copy"><strong>${escapeHtml(t.title)}</strong><small>${escapeHtml(t.artist||'Исполнитель не указан')}${t.service?` · ${escapeHtml(t.service)}`:''}</small></div><div class="track-controls"><select class="hit-select" data-track="${t.id}" aria-label="Категория ${escapeHtml(t.title)}">${Object.entries(hits).map(([key,label])=>`<option value="${key}" ${key===t.hit?'selected':''}>${label}</option>`).join('')}</select>${button('track-play',t.id,currentTrack===t.id&&(embedPlaying||!audio.paused)?'Ⅱ':'▶','row-btn')}${t.sourceUrl?`<a class="row-btn track-source" href="${escapeHtml(t.sourceUrl)}" target="_blank" rel="noopener noreferrer" title="Открыть источник">↗</a>`:''}${button('track-edit',t.id,'✎','row-btn')}${button('track-delete',t.id,'×','row-btn')}</div></div></div>`).join(''):(selectedPlaylist==='favorites'?empty('Ты пока не отметил ни одного трека сердечком.'):''));
 }
 function playlistEditor(id) {
   const playlist=state.playlists.find(p=>p.id===id);
@@ -1499,7 +1653,6 @@ function playlistEditor(id) {
 }
 $('#createPlaylist').onclick=()=>playlistEditor(null);
 $('#addTrack').onclick=()=>addTrackDialog('');
-$('#importVk').onclick=()=>importVkDialog('');
 function trackMetaFromFileName(name){
   const base=String(name||'').replace(/\.[a-z0-9]{2,5}$/i,'').trim();
   const parts=base.split(/\s+[–—-]\s+/);
@@ -1540,43 +1693,9 @@ function addTrackDialog(playlistId){
       state.tracks.push(...addedTracks);
       selectedPlaylist=playlist;
       const playlistName=playlists.find(item=>item.id===playlist)?.name||'';
-      logAction('добавил треки',`${addedTracks.length} шт. · ${playlistName}`,addedTracks[0]?.id||'');
+      logAction(addedTracks.length===1?'добавил трек':'добавил треки',`${addedTracks.length} шт. · ${playlistName}`,addedTracks[0]?.id||'');
       saveAndRender();
       toast(addedTracks.length===1?'Трек добавлен':`Добавлено треков: ${addedTracks.length}`);
-    },'Добавить');
-}
-function importVkDialog(playlistId){
-  if(!state.playlists.length){
-    state.playlists.push({id:uid(),name:'Моя музыка'});
-    persist();
-    renderMusic();
-  }
-  const playlists=state.playlists;
-  const target=playlistId||(selectedPlaylist&&selectedPlaylist!=='favorites'?selectedPlaylist:'')||playlists[0].id;
-  openEditor('Импорт трека из ВКонтакте',
-    field('Ссылка на трек',input('url','','url','required maxlength="500" placeholder="https://vk.ru/audio..." autocomplete="off"'))+
-    field('Название',input('title','','text','required maxlength="160" placeholder="Например: Ты Одна"'))+
-    field('Исполнитель',input('artist','','text','maxlength="120" placeholder="Например: FLOCKAA"'))+
-    field('Плейлист',`<select name="playlist">${playlists.map(p=>`<option value="${p.id}" ${p.id===target?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select>`)+
-    field('Категория',`<select name="hit">${Object.entries(hits).map(([key,label])=>`<option value="${key}">${label}</option>`).join('')}</select>`)+
-    '<p class="help-text">ВКонтакте не отдаёт прямой аудиопоток для импорта. Трек сохранится как карточка со ссылкой: кнопка ↗ и нажатие на строку откроют его на сайте ВКонтакте.</p>',
-    data=>{
-      const raw=String(data.get('url')||'').trim();
-      if(!raw)throw new Error('Вставьте ссылку на трек ВКонтакте.');
-      let url;
-      try{url=new URL(/^[a-z][a-z0-9+.-]*:/i.test(raw)?raw:`https://${raw}`);}catch{throw new Error('Введите корректную ссылку.');}
-      if(!/^https?:$/.test(url.protocol))throw new Error('Ссылка должна начинаться с http:// или https://.');
-      const host=url.hostname.toLowerCase();
-      if(!(host==='vk.com'||host.endsWith('.vk.com')||host==='vk.ru'||host.endsWith('.vk.ru')))throw new Error('Поддерживаются только ссылки ВКонтакте (vk.com или vk.ru).');
-      const title=String(data.get('title')||'').trim();
-      if(!title)throw new Error('Введите название трека.');
-      const playlist=String(data.get('playlist')),hit=String(data.get('hit'));
-      const track={id:uid(),title,artist:String(data.get('artist')||'').trim(),playlist,hit,favorite:false,created:Date.now(),cover:'',sourceUrl:url.href,service:'ВКонтакте',external:true};
-      state.tracks.push(track);
-      selectedPlaylist=playlist;
-      logAction('импортировал трек из ВКонтакте',`«${title}»${track.artist?` · ${track.artist}`:''}`,track.id);
-      saveAndRender();
-      toast('Ссылка на трек добавлена. Аудио откроется во ВКонтакте.');
     },'Добавить');
 }
 async function editTrack(id,playlistId) {
@@ -1592,7 +1711,7 @@ async function editTrack(id,playlistId) {
       if(file?.size>150*1024*1024)throw new Error('Максимальный размер аудиофайла — 150 МБ.');
       let cover=track?.cover||'';
       if(file?.size){if(!file.type.startsWith('audio/')&&!/\.(mp3|m4a|ogg|wav|flac)$/i.test(file.name))throw new Error('Выберите аудиофайл.');cover=await embeddedCover(file)||cover;await audioStore('put',id,file);}
-      const record={...track,id,title,artist:String(data.get('artist')).trim(),playlist:String(data.get('playlist')),hit:String(data.get('hit')),cover,created:track?.created||Date.now(),favorite:!!track?.favorite,audioUrl:file?.size?'':track?.audioUrl,external:file?.size?false:track?.external,sourceUrl:file?.size?'':track?.sourceUrl,service:file?.size?'':track?.service};
+      const record={...track,id,title,artist:String(data.get('artist')).trim(),playlist:String(data.get('playlist')),hit:String(data.get('hit')),cover,created:track?.created||Date.now(),favorite:!!track?.favorite,audioUrl:file?.size?'':track?.audioUrl};
       if(track)state.tracks[state.tracks.indexOf(track)]=record;else state.tracks.push(record);
       logAction(track?'изменил трек':'добавил трек',`«${title}»${record.artist?` · ${record.artist}`:''}`,id);
       saveAndRender();toast('Трек сохранён');
@@ -1617,11 +1736,6 @@ async function playTrack(id) {
     return;
   }
   const track=state.tracks.find(t=>t.id===id);if(!track)return;
-  if(track.external&&track.sourceUrl){
-    window.open(track.sourceUrl,'_blank','noopener,noreferrer');
-    toast('Трек открыт во ВКонтакте.');
-    return;
-  }
   if(track.embedUrl&&!track.audioUrl){playEmbed(track);return;}
   const generation=++playGeneration;
   try{
@@ -1639,10 +1753,8 @@ function nextTrack(direction) {
   let list=selectedPlaylist==='favorites'?state.tracks.filter(t=>t.favorite):state.tracks.filter(t=>!selectedPlaylist||t.playlist===selectedPlaylist);
   if(musicSort!=='new'&&!selectedPlaylist)list=list.filter(t=>t.hit===musicSort);
   if(!list.length){toast(selectedPlaylist==='favorites'?'В любимых пока нет треков.':'Добавь треки в плейлист.');return;}
-  const playable=list.filter(t=>!t.external);
-  if(!playable.length){toast('В этом списке только треки-ссылки. Открой их по кнопке ↗.');return;}
-  const index=playable.findIndex(t=>t.id===currentTrack);
-  playTrack(playable[(index+direction+playable.length)%playable.length].id);
+  const index=list.findIndex(t=>t.id===currentTrack);
+  playTrack(list[(index+direction+list.length)%list.length].id);
 }
 $('#playBtn').onclick=()=>currentTrack?playTrack(currentTrack):nextTrack(1);$('#prevTrack').onclick=()=>nextTrack(-1);$('#nextTrack').onclick=()=>nextTrack(1);
 audio.onplay=()=>{$('#playBtn').textContent='Ⅱ';renderMusic();};audio.onpause=()=>{$('#playBtn').textContent='▶';if(!embedPlaying)stopAura();renderMusic();};audio.onended=()=>{stopAura();nextTrack(1);};audio.onerror=()=>{stopAura();toast('Формат аудио не поддерживается или файл повреждён.',true);};
@@ -1705,24 +1817,24 @@ $('#musicSort').onclick=()=>{const modes=['new','day','week','month','year'];mus
 document.addEventListener('change',e=>{if(e.target.matches('.hit-select')){const track=state.tracks.find(t=>t.id===e.target.dataset.track);if(track){track.hit=e.target.value;persist();renderMusic();}}});
 
 // Settings only expose actions that have a real local implementation.
-$('.preferences').innerHTML=`<div id="themePreferences"></div><div class="preference-row" id="accountPreference"></div><div class="preference-row"><div><strong>Утренний план</strong><span>Показывать напоминание при открытии после 08:00</span></div><button class="toggle" data-setting="morning" aria-label="Утренний план"><i></i></button></div><div class="preference-row"><div><strong>Звук выполнения</strong><span>Короткий сигнал при завершении задачи</span></div><button class="toggle" data-setting="sound" aria-label="Звук выполнения"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать колокольчик напоминаний</span></div><button class="toggle" data-setting="focus" aria-label="Фокус-режим"><i></i></button></div><div id="securityPreferences"></div><div class="preference-row"><div><strong>Хранение данных</strong><span>${CLOUD_ENABLED?'Синхронизируется с облаком Supabase. Аудио и видео — в этом браузере.':'Автоматически в этом браузере. Аудио и видео — в IndexedDB.'}</span></div>${button('export','','Экспорт данных')}</div>`;
+$('.preferences').innerHTML=`<div id="themePreferences"></div><div id="tabPreferences"></div><div class="preference-row" id="accountPreference"></div><div class="preference-row"><div><strong>Утренний план</strong><span>Показывать напоминание при открытии после 08:00</span></div><button class="toggle" data-setting="morning" aria-label="Утренний план"><i></i></button></div><div class="preference-row"><div><strong>Звук выполнения</strong><span>Короткий сигнал при завершении задачи</span></div><button class="toggle" data-setting="sound" aria-label="Звук выполнения"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать колокольчик напоминаний</span></div><button class="toggle" data-setting="focus" aria-label="Фокус-режим"><i></i></button></div><div id="securityPreferences"></div><div class="preference-row"><div><strong>Хранение данных</strong><span>${CLOUD_ENABLED?'Синхронизируется с облаком Supabase. Аудио и видео — в этом браузере.':'Автоматически в этом браузере. Аудио и видео — в IndexedDB.'}</span></div>${button('export','','Экспорт данных')}</div>`;
 function renderThemePreferences(){
   const box=$('#themePreferences'); if(!box)return;
   const previewColor=themeAccentColor(state.accent,state.theme);
-  box.innerHTML=`<div class="theme-preferences"><div class="theme-pref-head"><div><strong>Оформление</strong><span>Тема и цвет акцента · фон плавно переливается</span></div><span class="theme-preview-dot" style="--preview:${previewColor}"></span></div><div class="theme-pref-grid single"><label class="theme-field">Тема<select id="themeSelect">${Object.entries(THEME_LABELS).map(([key,label])=>`<option value="${key}" ${state.theme===key?'selected':''}>${label}</option>`).join('')}</select></label></div><div class="theme-swatches" role="radiogroup" aria-label="Цвет акцента">${Object.entries(THEME_PRESETS).map(([key,item])=>`<span class="theme-swatch-wrap"><button type="button" class="theme-swatch ${state.accent===key?'active':''}" data-accent="${key}" style="--swatch:${themeAccentColor(key,state.theme)}" title="${escapeHtml(item.label)}" aria-label="${escapeHtml(item.label)}" aria-pressed="${state.accent===key}"></button><span class="theme-swatch-name">${escapeHtml(item.label)}</span></span>`).join('')}</div></div>`;
+  box.innerHTML=`<div class="theme-preferences"><div class="theme-pref-head"><div><strong>Оформление</strong><span>Тема и цвет акцента · фон плавно переливается</span></div><span class="theme-preview-dot" style="--preview:${previewColor}"></span></div><div class="theme-pref-grid single"><label class="theme-field">Тема<select id="themeSelect">${Object.entries(THEME_LABELS).map(([key,label])=>`<option value="${key}" ${state.theme===key?'selected':''}>${label}</option>`).join('')}</select></label></div><div class="theme-swatches" role="radiogroup" aria-label="Цвет акцента">${Object.entries(THEME_PRESETS).map(([key,item])=>`<span class="theme-swatch-wrap"><button type="button" class="theme-swatch ${state.accent===key?'active':''}" data-accent="${key}" style="--swatch:${themeAccentColor(key,state.theme)}" title="${escapeHtml(themeAccentLabel(key,state.theme))}" aria-label="${escapeHtml(themeAccentLabel(key,state.theme))}" aria-pressed="${state.accent===key}"></button><span class="theme-swatch-name">${escapeHtml(themeAccentLabel(key,state.theme))}</span></span>`).join('')}</div></div>`;
   $('#themeSelect').onchange=e=>{
     state.theme=e.target.value==='light'?'light':'black';
     applyTheme();persist();renderThemePreferences();
-    logAction('изменил тему',THEME_LABELS[state.theme]||'Чёрная');
   };
   $$('.theme-swatch',box).forEach(swatch=>swatch.onclick=()=>{
     state.accent=THEME_PRESETS[swatch.dataset.accent]?swatch.dataset.accent:'blue';
     applyTheme();persist();renderThemePreferences();
-    logAction('изменил цвет темы',THEME_PRESETS[state.accent].label);
   });
 }
 function renderSettings(){
   renderThemePreferences();
+  renderTabSettings();
+  applyTabVisibility();
   $$('[data-setting]').forEach(el=>{el.classList.toggle('on',state.settings[el.dataset.setting]);el.setAttribute('aria-pressed',String(state.settings[el.dataset.setting]));});
   $('#notificationsBtn').hidden=state.settings.focus;
   const security=$('#securityPreferences');
@@ -1850,7 +1962,7 @@ function renderAdminStats(){
     ['◉','ПОЛЬЗОВАТЕЛИ',source.length,'Всего аккаунтов'],
     ['⌁','АКТИВНЫ СЕГОДНЯ',active,'Заходили в Сферу'],
     ['⚑','ПРЕДУПРЕЖДЕНИЯ',warnings,'Выдано пользователям'],
-    ['▤','СОБЫТИЯ',CLOUD_ENABLED?adminEvents.length:adminDb.events.length,'Записей в журнале']
+    ['▤','СОБЫТИЯ',visibleLogEvents(CLOUD_ENABLED?adminEvents:adminDb.events).length,'Записей в журнале']
   ];
   box.innerHTML=stats.map(([icon,label,value,note])=>`<article class="admin-stat"><span class="admin-stat-icon">${icon}</span><div><small>${label}</small><strong>${value}</strong><span>${note}</span></div></article>`).join('');
 }
@@ -1878,7 +1990,7 @@ function renderAdminUsers(){
 }
 function renderAdminLog(){
   const box=$('#adminLogList');if(!box)return;
-  const events=(CLOUD_ENABLED?adminEvents:adminDb.events).slice(0,120);
+  const events=visibleLogEvents(CLOUD_ENABLED?adminEvents:adminDb.events).slice(0,120);
   box.innerHTML=events.length?events.map(event=>{
     const actor=event.actor||{};
     return `<div class="admin-log-item" data-log-event="${escapeHtml(event.id)}" role="button" tabindex="0"><span class="admin-log-dot">•</span><div class="admin-log-body"><div class="admin-log-top"><strong>${escapeHtml(actor.name||actor.alias||actor.email||'Гость')}</strong><small>${formatAdminDateTime(event.at)}</small></div><p><b>${escapeHtml(event.action||'событие')}</b>${event.details?`<span>${escapeHtml(event.details)}</span>`:''}</p>${actor.email?`<small class="admin-log-email">${escapeHtml(actor.email)}</small>`:''}</div></div>`;
@@ -1978,7 +2090,6 @@ async function adminProfileDialog(id){
     adminProfileData={account,warnings,stats,lastSeen:account.lastSeen,state:profile.state&&typeof profile.state==='object'?profile.state:null};
     adminProfilePhoto=adminPhotoData(account).photo||'';
     openEditor(`Профиль · ${account.name||account.alias}`,adminProfileMarkup(account,warnings,stats,account.lastSeen),null);
-    logAction('открыл профиль пользователя',`${account.name||account.alias} (${account.email})`,id);
     return;
   }
   const account=accounts.find(item=>item.id===id);if(!account)return;
@@ -1988,7 +2099,6 @@ async function adminProfileDialog(id){
   adminProfileData={account,warnings,stats,lastSeen:record.lastSeen,state:{tasks:userState.tasks,goals:userState.goals,tracks:userState.tracks,playlists:userState.playlists}};
   adminProfilePhoto=adminPhotoData(account).photo||'';
   openEditor(`Профиль · ${account.name||account.alias}`,adminProfileMarkup(account,warnings,stats,record.lastSeen),null);
-  logAction('открыл профиль пользователя',`${account.name||account.alias} (${account.email})`,id);
 }
 function adminWarnDialog(id){
   const account=(CLOUD_ENABLED?adminUsers:accounts).find(item=>item.id===id);if(!account)return;
@@ -2558,7 +2668,7 @@ $('#adminSupportHide').onclick=()=>{
 
 let adminLogSelectedId='';
 const adminLogDialog=$('#adminLogDialog');
-function adminLogEventsSource(){return CLOUD_ENABLED?adminEvents:adminDb.events;}
+function adminLogEventsSource(){return visibleLogEvents(CLOUD_ENABLED?adminEvents:adminDb.events);}
 function adminLogFilteredEvents(query=''){
   const needle=String(query||'').trim().toLowerCase();
   const events=adminLogEventsSource();
@@ -2747,7 +2857,7 @@ function showAuth(tab = 'login') {
 function applyStateAfterLogin() {
   selectedDate=today();calendarMonth=new Date().getMonth();calendarYear=new Date().getFullYear();
   taskFilter='all';taskSort='manual';selectedPlaylist='';currentTrack='';newsFilter='Все';
-  applyVolumeFromState();applyTheme();showView('overview');renderAll();updateClock();
+  applyVolumeFromState();applyTheme();applyTabVisibility();showView(defaultView());renderAll();updateClock();
   if(state.settings.morning&&new Date().getHours()>=8&&state.lastMorning!==today()){
     state.lastMorning=today();persist();toast(`Твой план на сегодня: ${state.tasks.filter(t=>t.date===today()&&t.progress<100).length} незавершённых задач.`);
   }
@@ -3001,7 +3111,7 @@ function hydrateCachedSession(){
   try{
     document.body.classList.remove('auth-locked');
     $('#authScreen').hidden=true;
-    applyTheme();renderAll();updateClock();
+    applyTheme();applyTabVisibility();renderAll();updateClock();
   }catch{}
 }
 async function boot(){
