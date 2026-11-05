@@ -888,6 +888,7 @@ async function applyCabinetShader(colors,active){
   if(!colors){destroyCabinetShader();return;}
   const canvas=$('#cabinetBgShader');
   if(!canvas||!navigator.gpu)return;
+  canvas.style.cssText='position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;';
   if(cabinetShader){
     const key=shaderColorsKey(colors);
     if(key!==cabinetShaderColors){cabinetShader.update(CABINET_SHADER_LAYER,{...colors});cabinetShaderColors=key;}
@@ -906,7 +907,7 @@ async function applyCabinetShader(colors,active){
     cabinetShader=instance;
     cabinetShaderColors=shaderColorsKey(fresh);
     if(shaderColorsKey(fresh)!==shaderColorsKey(current))instance.update(CABINET_SHADER_LAYER,{...fresh});
-    const stillActive=activeView==='profile'&&!document.body.classList.contains('auth-locked');
+    const stillActive=!document.body.classList.contains('auth-locked');
     if(!stillActive)instance.pause();
   }catch(error){
     console.warn('Не удалось запустить живой фон кабинета:',error);
@@ -917,18 +918,19 @@ async function applyCabinetShader(colors,active){
 }
 function applyCabinetBackground(){
   const value=cabinetBackgroundValue(),videoValue=cabinetVideoValue(),shaderValue=navigator.gpu?cabinetShaderValue():null;
-  const active=activeView==='profile'&&!document.body.classList.contains('auth-locked');
+  const unlocked=!document.body.classList.contains('auth-locked');
+  const activeProfile=activeView==='profile'&&unlocked;
   document.documentElement.style.setProperty('--cabinet-bg',value?`url("${value}")`:'none');
-  document.body.classList.toggle('profile-cabinet-bg',!!value&&active);
-  document.body.classList.toggle('profile-cabinet-video',!!videoValue&&active);
-  document.body.classList.toggle('profile-cabinet-shader',!!shaderValue&&active);
+  document.body.classList.toggle('profile-cabinet-bg',!!value&&activeProfile);
+  document.body.classList.toggle('profile-cabinet-video',!!videoValue&&activeProfile);
+  document.body.classList.toggle('profile-cabinet-shader',!!shaderValue&&unlocked);
   const video=$('#cabinetBgVideo');
   if(!videoValue){resetCabinetVideo(video);}
   else{
     loadCabinetVideo(videoValue);
-    if(video){if(active)video.play().catch(()=>{});else video.pause();}
+    if(video){if(activeProfile)video.play().catch(()=>{});else video.pause();}
   }
-  applyCabinetShader(shaderValue,active);
+  applyCabinetShader(shaderValue,unlocked);
 }
 let profileSection='tracks';
 const galleryURLs=new Map();
@@ -1490,6 +1492,7 @@ function updateShaderPreview(key,hex){
 async function startShaderPreview(){
   const canvas=$('#shaderBgPreview',editor);
   if(!canvas||shaderPreview||shaderPreviewBusy)return;
+  canvas.style.cssText='display:block;width:100%;height:100%;';
   shaderPreviewBusy=true;
   const token=++shaderPreviewToken;
   try{
