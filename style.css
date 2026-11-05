@@ -1097,3 +1097,52 @@ html[data-theme="light"] .profile-owner:not([hidden]){animation-name:owner-spark
   .profile-owner:not([hidden]){animation:none!important;text-shadow:0 0 8px rgba(46,230,166,.35)!important}
   .news-favorite{transition:none!important}
 }
+
+/* ============================================================
+   v42: мини-панель воспроизведения и просмотр фото
+   ============================================================ */
+.mini-player{position:fixed;top:96px;left:calc(248px + (100% - 248px) / 2);z-index:2000;display:flex;align-items:center;gap:12px;width:min(430px,calc(100% - 280px));padding:9px 12px;border:1px solid color-mix(in srgb,var(--blue) 38%,var(--line));border-radius:14px;background:color-mix(in srgb,var(--panel) 92%,transparent);backdrop-filter:blur(16px);box-shadow:0 20px 55px #000a,0 0 0 1px #ffffff0d inset;animation:mini-player-in .3s cubic-bezier(.22,1,.36,1) both}
+@keyframes mini-player-in{from{transform:translate(-50%,-160%);opacity:0}to{transform:translate(-50%,0);opacity:1}}
+.mini-player{transform:translate(-50%,0)}
+.mini-player[hidden]{display:none!important}
+.mini-player-cover{width:42px;height:42px;flex:none;display:grid;place-items:center;overflow:hidden;border-radius:10px;background:var(--accent-gradient);color:var(--accent-contrast,#101722);font-size:17px;box-shadow:0 6px 18px #0006}
+.mini-player-cover img{width:100%;height:100%;object-fit:cover;display:block}
+.mini-player-body{min-width:0;flex:1;display:grid;gap:4px}
+.mini-player-body strong{font-size:12px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mini-player-body small{font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mini-player-progress{height:3px;border-radius:4px;background:color-mix(in srgb,var(--panel2) 70%,var(--line) 30%);overflow:hidden}
+.mini-player-progress i{display:block;height:100%;width:0;border-radius:inherit;background:linear-gradient(90deg,var(--accent-2),var(--blue))}
+.mini-player-controls{display:flex;align-items:center;gap:5px;flex:none}
+.mini-player-controls button{width:32px;height:32px;display:grid;place-items:center;border-radius:9px;background:transparent;color:var(--muted);font-size:15px;line-height:1;transition:background .18s ease,color .18s ease}
+.mini-player-controls button:hover{background:var(--panel2);color:var(--text)}
+.mini-player-controls #miniPlayerPlay{background:var(--blue);color:var(--accent-contrast,#101722);font-size:13px}
+.mini-player-controls #miniPlayerPlay:hover{background:var(--blue);filter:brightness(1.1)}
+html[data-theme="light"] .mini-player{background:color-mix(in srgb,#fff 92%,transparent);border-color:color-mix(in srgb,var(--blue) 32%,var(--line))}
+@media(max-width:1050px){
+  .mini-player{left:calc(220px + (100% - 220px) / 2);width:min(430px,calc(100% - 250px))}
+}
+@media(max-width:720px){
+  .mini-player{top:78px;left:50%;width:calc(100% - 16px);gap:9px;padding:8px 9px;border-radius:12px}
+  .mini-player-cover{width:38px;height:38px}
+  .mini-player-controls button{width:29px;height:29px}
+}
+
+.profile-photo-viewer{max-width:1320px;margin:18px auto 0;padding:16px 18px;border:1px solid var(--line);border-radius:13px;background:var(--panel);box-shadow:var(--shadow);display:grid;gap:13px;animation:appear-up .3s ease both}
+.profile-photo-viewer[hidden]{display:none!important}
+.photo-viewer-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.photo-viewer-head strong{display:block;font-size:12px;color:var(--text)}
+.photo-viewer-head .eyebrow{margin:0 0 4px}
+.photo-viewer-head .row-btn{width:28px;height:28px;flex:none;font-size:15px}
+.photo-viewer-stage{display:grid;place-items:center;border-radius:10px;overflow:hidden;background:color-mix(in srgb,var(--panel2) 80%,transparent);border:1px solid var(--line);padding:10px}
+.photo-viewer-stage img{max-width:100%;max-height:420px;width:auto;display:block;object-fit:contain}
+.photo-viewer-actions{display:flex;flex-wrap:wrap;gap:8px}
+.photo-viewer-actions .secondary-btn{padding:9px 13px;font-size:11px;text-decoration:none;display:inline-flex;align-items:center}
+@media(max-width:720px){
+  .photo-viewer-stage img{max-height:300px}
+}
+@media(prefers-reduced-motion:reduce){
+  .mini-player{animation:none!important;transform:translate(-50%,0)}
+  .profile-photo-viewer{animation:none!important}
+}
+body.auth-locked .mini-player,body.auth-locked .profile-photo-viewer{display:none!important}
+.mini-player{pointer-events:auto}

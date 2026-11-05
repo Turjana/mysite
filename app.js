@@ -441,7 +441,49 @@ $('#editorForm').onsubmit = async e => {
 function confirmDelete(label, callback) {
   openEditor('Удаление', `<p>Удалить «${escapeHtml(label)}»?</p>`, () => { callback(); saveAndRender(); }, 'Удалить');
 }
-function tabEnabled(view){return view==='admin'||view==='settings'||view==='maintenance'||state.settings?.tabs?.[view]!==false;}
+const configRpc = (name, payload = {}) => cloudRpc(name, payload);
+function readSiteConfigCache(){try{const value=JSON.parse(localStorage.getItem('sphere-site-config'));return value&&typeof value==='object'?{tabs:{},...value,tabs:{...(value.tabs||{})}}:{tabs:{}};}catch{return {tabs:{}};}}
+let siteConfig = readSiteConfigCache();
+let siteConfigLoaded = false;
+function siteTabEnabled(view){
+  const local = state.settings?.tabs?.[view];
+  const global = siteConfig.tabs?.[view];
+  if (global === false) return false;
+  if (global === true) return true;
+  return local !== false;
+}
+function cacheSiteConfig(value){
+  siteConfig={tabs:{},...value,tabs:{...(value?.tabs||{})}};
+  try{localStorage.setItem('sphere-site-config',JSON.stringify(siteConfig));}catch{}
+}
+function fetchSiteConfig() {
+  if (!CLOUD_ENABLED) return Promise.resolve(null);
+  return configRpc('sphere_config_get')
+    .then(data => {
+      if (data && typeof data === 'object') cacheSiteConfig(data);
+      siteConfigLoaded = true;
+      return siteConfig;
+    })
+    .catch(() => null);
+}
+function saveSiteConfig(patch) {
+  if (!CLOUD_ENABLED || !cloudSessionActive() || !isOwner(currentAccount)) return Promise.resolve(null);
+  return configRpc('sphere_config_set',{p_id:currentAccount.id,p_token:currentAccount.token,p_patch:patch})
+    .then(data => {
+      if (data && typeof data === 'object') cacheSiteConfig(data);
+      return siteConfig;
+    })
+    .catch(() => null);
+}
+function applySiteConfig(){
+  applyTabVisibility();
+  if(activeView==='settings'){renderSettings();return;}
+  if(activeView!=='admin'&&activeView!=='maintenance'&&!tabEnabled(activeView))showView(activeView);
+}
+function refreshSiteConfigAndApply(){
+  fetchSiteConfig().then(data=>{if(data)applySiteConfig();});
+}
+function tabEnabled(view){return view==='admin'||view==='settings'||view==='maintenance'||siteTabEnabled(view);}
 function tabLabel(view){return TAB_VIEWS[view]?.label||'Вкладка';}
 function defaultView(){
   if(tabEnabled('overview'))return 'overview';
@@ -459,14 +501,23 @@ function applyTabVisibility(){
 }
 function renderTabSettings(){
   const box=$('#tabPreferences'); if(!box)return;
-  box.innerHTML=`<div class="preference-block"><div class="preference-block-head"><strong>Вкладки</strong><span>Включай нужные разделы или переводи их в технический режим</span></div>${Object.entries(TAB_VIEWS).map(([key,item])=>`<div class="preference-row tab-preference"><div><strong>${escapeHtml(item.label)}</strong><span>${tabEnabled(key)?'Вкладка активна':'Технический режим'}</span></div><button type="button" class="toggle ${tabEnabled(key)?'on':''}" data-tab-toggle="${key}" aria-label="${escapeHtml(item.label)}" aria-pressed="${tabEnabled(key)}"><i></i></button></div>`).join('')}</div>`;
-  $$('[data-tab-toggle]',box).forEach(btn=>btn.onclick=()=>{
+  const canEdit=!CLOUD_ENABLED||isOwner(currentAccount);
+  box.innerHTML=`<div class="preference-block"><div class="preference-block-head"><strong>Вкладки</strong><span>${canEdit?'ON — вкладка активна, OFF — технический режим у всех пользователей':'Разделы настраивает владелец — изменения видны всем пользователям'}</span></div>${Object.entries(TAB_VIEWS).map(([key,item])=>`<div class="preference-row tab-preference"><div><strong>${escapeHtml(item.label)}</strong><span>${tabEnabled(key)?'Вкладка активна':'Технический режим'}</span></div>${canEdit?`<button type="button" class="toggle ${tabEnabled(key)?'on':''}" data-tab-toggle="${key}" aria-label="${escapeHtml(item.label)}" aria-pressed="${tabEnabled(key)}"><i></i></button>`:`<span class="tab-readonly ${tabEnabled(key)?'on':'off'}">${tabEnabled(key)?'ON':'OFF'}</span>`}</div>`).join('')}</div>`;
+  if(!canEdit)return;
+  $$('[data-tab-toggle]',box).forEach(btn=>btn.onclick=async()=>{
     const key=btn.dataset.tabToggle,next=!tabEnabled(key);
     state.settings.tabs={...(state.settings.tabs||{}),[key]:next};
+    siteConfig.tabs={...(siteConfig.tabs||{}),[key]:next};
     persist();renderTabSettings();applyTabVisibility();
     if(!next&&activeView===key)showView('maintenance',key);
     if(next&&activeView==='maintenance'&&$('#view-maintenance')?.dataset.tab===key)showView(key);
-    toast(next?`Вкладка «${tabLabel(key)}» включена`:`Вкладка «${tabLabel(key)}» в техническом режиме`);
+    let globalSaved=true;
+    if(CLOUD_ENABLED&&isOwner(currentAccount)){
+      const saved=await saveSiteConfig({tabs:{...(siteConfig.tabs||{})}});
+      globalSaved=!!saved;
+      if(globalSaved)applyTabVisibility();
+    }
+    toast(globalSaved?(next?`Вкладка «${tabLabel(key)}» включена у всех`:`Вкладка «${tabLabel(key)}» в техническом режиме у всех`):'Не удалось сохранить для всех. Проверьте SQL-обновление.',!globalSaved);
   });
 }
 function showView(view,maintenanceTab='') {
@@ -483,6 +534,7 @@ function showView(view,maintenanceTab='') {
   }
   if (activeView === 'admin' && view !== 'admin') markAdminSeen();
   activeView = view;
+  if (view !== 'profile') hideProfilePhotoViewer();
   applyCabinetBackground();
   $$('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`));
   $$('.nav-item[data-view]').forEach(el => { el.classList.toggle('active', el.dataset.view === view); el.setAttribute('aria-current', el.dataset.view === view ? 'page' : 'false'); });
@@ -932,6 +984,75 @@ function toggleFavoriteArticle(item){
   }
   persist();renderProfile();renderNews();
 }
+function showProfilePhoto(){
+  const box=$('#profilePhotoViewer');if(!box)return;
+  const photo=state.profile.photo;
+  box.dataset.mode='photo';
+  box.hidden=false;
+  box.innerHTML=`<div class="photo-viewer-head"><div><p class="eyebrow">ФОТО ПРОФИЛЯ</p><strong>${escapeHtml(state.profile.name||'Твой профиль')}</strong></div><button type="button" class="row-btn" data-photo-close title="Скрыть">×</button></div><div class="photo-viewer-stage"><img src="${escapeHtml(photo)}" alt="Фото профиля" style="object-position:${Math.min(100,Math.max(0,+state.profile.photoX||50))}% ${Math.min(100,Math.max(0,+state.profile.photoY||50))}%"></div><div class="photo-viewer-actions"><a class="secondary-btn" href="${escapeHtml(photo)}" download="sphere-photo.jpg">Скачать</a>${isOwner(currentAccount)?'<button type="button" class="secondary-btn" data-photo-edit>Изменить</button>':''}</div>`;
+  box.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+async function galleryPhotoSrc(photo){
+  if(!photo)return '';
+  if(photo.src)return String(photo.src);
+  if(!photo.key)return '';
+  let url=galleryURLs.get(photo.key);
+  if(!url){
+    try{
+      const blob=await audioStore('get',photo.key);
+      if(blob){url=URL.createObjectURL(blob);galleryURLs.set(photo.key,url);}
+    }catch{}
+  }
+  return url||'';
+}
+async function showGalleryPhoto(index){
+  const box=$('#profilePhotoViewer');if(!box)return;
+  const list=Array.isArray(state.gallery)?state.gallery:[];
+  const position=Math.min(list.length-1,Math.max(0,index));
+  const photo=list[position];if(!photo)return;
+  const src=await galleryPhotoSrc(photo);
+  box.dataset.mode='gallery';
+  box.dataset.index=String(position);
+  box.hidden=false;
+  box.innerHTML=`<div class="photo-viewer-head"><div><p class="eyebrow">ГАЛЕРЕЯ · ${position+1} ИЗ ${list.length}</p><strong>${escapeHtml(photo.title||'Фото галереи')}</strong></div><button type="button" class="row-btn" data-photo-close title="Скрыть">×</button></div><div class="photo-viewer-stage"><img src="${escapeHtml(src||'')}" alt="${escapeHtml(photo.title||'Фото галереи')}"></div><div class="photo-viewer-actions">${list.length>1?'<button type="button" class="secondary-btn" data-photo-prev>← Назад</button><button type="button" class="secondary-btn" data-photo-next>Вперёд →</button>':''}<button type="button" class="secondary-btn" data-photo-remove="${escapeHtml(photo.id)}">Удалить</button></div>`;
+  box.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function hideProfilePhotoViewer(){
+  const box=$('#profilePhotoViewer');if(!box)return;
+  box.hidden=true;box.dataset.mode='';box.innerHTML='';
+}
+document.addEventListener('click',e=>{
+  if(e.target.closest('[data-photo-close]')){hideProfilePhotoViewer();return;}
+  const edit=e.target.closest('[data-photo-edit]');
+  if(edit){hideProfilePhotoViewer();editProfile();return;}
+  const prev=e.target.closest('[data-photo-prev]');
+  if(prev){const box=$('#profilePhotoViewer');showGalleryPhoto(+box.dataset.index-1);return;}
+  const next=e.target.closest('[data-photo-next]');
+  if(next){const box=$('#profilePhotoViewer');showGalleryPhoto(+box.dataset.index+1);return;}
+  const removeInViewer=e.target.closest('[data-photo-remove]');
+  if(removeInViewer){
+    const id=removeInViewer.dataset.photoRemove;
+    const photo=(state.gallery||[]).find(item=>item.id===id);
+    if(photo?.key){
+      audioStore('delete',photo.key).catch(()=>{});
+      const url=galleryURLs.get(photo.key);
+      if(url){URL.revokeObjectURL(url);galleryURLs.delete(photo.key);}
+    }
+    state.gallery=(state.gallery||[]).filter(item=>item.id!==id);
+    hideProfilePhotoViewer();
+    persist();renderProfile();
+    toast('Фото удалено из галереи');
+    return;
+  }
+  const openAvatar=e.target.closest('#profileCard .profile-avatar');
+  if(openAvatar){
+    if(!state.profile.photo)return;
+    showProfilePhoto();
+    return;
+  }
+  const galleryPhoto=e.target.closest('[data-gallery-index]');
+  if(galleryPhoto){showGalleryPhoto(+galleryPhoto.dataset.galleryIndex);return;}
+});
 function renderProfileHub(){
   const panel=$('#profileHubPanel'); if(!panel)return;
   $$('.profile-hub-tab').forEach(tab=>{const active=tab.dataset.profileSection===profileSection;tab.classList.toggle('active',active);tab.setAttribute('aria-selected',String(active));});
@@ -942,7 +1063,7 @@ function renderProfileHub(){
   }
   if(profileSection==='gallery'){
     const gallery=Array.isArray(state.gallery)?state.gallery:[];
-    panel.innerHTML=`<div class="profile-gallery-toolbar"><button type="button" class="secondary-btn" id="addGalleryPhoto">＋ Добавить фото</button><input type="file" id="galleryPhotoInput" accept="image/*" multiple hidden></div>${gallery.length?`<div class="profile-gallery">${gallery.map(photo=>`<figure class="profile-gallery-item"><img ${photo.key?`data-gallery-key="${escapeHtml(photo.key)}"`:''} ${photo.src?`src="${escapeHtml(photo.src)}"`:''} alt="${escapeHtml(photo.title||'Фото галереи')}"><button type="button" class="profile-gallery-remove" data-remove-gallery="${escapeHtml(photo.id)}" title="Удалить фото">×</button></figure>`).join('')}</div>`:'<p class="empty-state">Галерея пока пуста. Добавь фотографии, которые тебе нравятся.</p>'}`;
+    panel.innerHTML=`<div class="profile-gallery-toolbar"><button type="button" class="secondary-btn" id="addGalleryPhoto">＋ Добавить фото</button><input type="file" id="galleryPhotoInput" accept="image/*" multiple hidden></div>${gallery.length?`<div class="profile-gallery">${gallery.map((photo,index)=>`<figure class="profile-gallery-item"><img ${photo.key?`data-gallery-key="${escapeHtml(photo.key)}"`:''} ${photo.src?`src="${escapeHtml(photo.src)}"`:''} data-gallery-index="${index}" alt="${escapeHtml(photo.title||'Фото галереи')}"><button type="button" class="profile-gallery-remove" data-remove-gallery="${escapeHtml(photo.id)}" title="Удалить фото">×</button></figure>`).join('')}</div>`:'<p class="empty-state">Галерея пока пуста. Добавь фотографии, которые тебе нравятся.</p>'}`;
     $$('[data-gallery-key]',panel).forEach(async img=>{
       const key=img.dataset.galleryKey;
       try{
@@ -994,6 +1115,7 @@ function renderProfile() {
   const owner=isOwner(currentAccount);
   const prefix=$('#profileOwner');
   if(prefix){prefix.hidden=!owner;prefix.textContent=state.profile.status||'✦ В своём ритме';}
+  if(!state.profile.photo&&$('#profilePhotoViewer')?.dataset.mode==='photo')hideProfilePhotoViewer();
   const cabinetBtn=$('#profileCabinetBgBtn');
   if(cabinetBtn){cabinetBtn.hidden=!owner;cabinetBtn.classList.toggle('has-bg',!!(cabinetBackgroundValue()||cabinetVideoValue()));}
   applyCabinetBackground();
@@ -1441,6 +1563,8 @@ document.addEventListener('click',e=>{
   const removePhoto=e.target.closest('[data-remove-gallery]');
   if(removePhoto){
     const id=removePhoto.dataset.removeGallery;
+    const viewer=$('#profilePhotoViewer');
+    if(viewer?.dataset.mode==='gallery'&&viewer.innerHTML.includes(`data-photo-remove="${id}"`))hideProfilePhotoViewer();
     const photo=(state.gallery||[]).find(item=>item.id===id);
     if(photo?.key){
       audioStore('delete',photo.key).catch(()=>{});
@@ -1725,13 +1849,13 @@ function playEmbed(track){
   $('#musicHero').classList.remove('empty-player');$('#musicHero').classList.add('embed-playing');
   $('#musicCurrent').textContent='—';$('#musicDuration').textContent='—';$('#musicProgress').style.width='0%';$('#playBtn').textContent='Ⅱ';
   const bar=$('#musicProgressBar');if(bar){bar.classList.add('disabled');bar.setAttribute('aria-valuemax','0');bar.setAttribute('aria-valuenow','0');bar.setAttribute('aria-valuetext','Встроенный плеер');}
-  startAura(track,{synthetic:true});renderMusic();
+  startAura(track,{synthetic:true});updateMiniPlayer();renderMusic();
   toast('Трек открыт во встроенном плеере сервиса.');
 }
 async function playTrack(id) {
   if(currentTrack===id&&(embedPlaying||audio.src)){
     if(embedPlaying){stopCurrentTrack();return;}
-    if(audio.paused){try{await audio.play();startAura(state.tracks.find(t=>t.id===id));}catch{toast('Не удалось воспроизвести файл.',true);}}
+    if(audio.paused){try{await audio.play();startAura(state.tracks.find(t=>t.id===id));updateMiniPlayer();}catch{toast('Не удалось воспроизвести файл.',true);}}
     else audio.pause();
     return;
   }
@@ -1746,7 +1870,7 @@ async function playTrack(id) {
       src=URL.createObjectURL(blob);fromBlob=true;
     }
     audio.pause();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=fromBlob?src:'';audio.src=src;currentTrack=id;embedPlaying=false;updateVolumeUI();updateNowPlayingLike();$('#musicProgressBar')?.classList.remove('disabled');
-    $('#nowPlayingTitle').textContent=track.title;$('#nowPlayingArtist').textContent=track.artist||'Исполнитель не указан';$('.album-art').innerHTML=coverMarkup(track,'playing-cover');$('#musicHero').classList.remove('empty-player','embed-playing');await audio.play();startAura(track);
+    $('#nowPlayingTitle').textContent=track.title;$('#nowPlayingArtist').textContent=track.artist||'Исполнитель не указан';$('.album-art').innerHTML=coverMarkup(track,'playing-cover');$('#musicHero').classList.remove('empty-player','embed-playing');await audio.play();startAura(track);updateMiniPlayer();
   }catch(error){stopAura();toast(error.message||'Не удалось воспроизвести трек.',true);}
 }
 function nextTrack(direction) {
@@ -1757,7 +1881,7 @@ function nextTrack(direction) {
   playTrack(list[(index+direction+list.length)%list.length].id);
 }
 $('#playBtn').onclick=()=>currentTrack?playTrack(currentTrack):nextTrack(1);$('#prevTrack').onclick=()=>nextTrack(-1);$('#nextTrack').onclick=()=>nextTrack(1);
-audio.onplay=()=>{$('#playBtn').textContent='Ⅱ';renderMusic();};audio.onpause=()=>{$('#playBtn').textContent='▶';if(!embedPlaying)stopAura();renderMusic();};audio.onended=()=>{stopAura();nextTrack(1);};audio.onerror=()=>{stopAura();toast('Формат аудио не поддерживается или файл повреждён.',true);};
+audio.onplay=()=>{$('#playBtn').textContent='Ⅱ';updateMiniPlayer();renderMusic();};audio.onpause=()=>{$('#playBtn').textContent='▶';if(!embedPlaying)stopAura();updateMiniPlayer();renderMusic();};audio.onended=()=>{stopAura();nextTrack(1);};audio.onerror=()=>{stopAura();toast('Формат аудио не поддерживается или файл повреждён.',true);};
 function musicProgressUpdate(){
   const duration=Number.isFinite(audio.duration)?audio.duration:0;
   const current=Math.min(audio.currentTime||0,duration||0);
@@ -1765,6 +1889,7 @@ function musicProgressUpdate(){
   $('#musicCurrent').textContent=timerText(Math.floor(current));
   $('#musicDuration').textContent=duration?timerText(Math.floor(duration)):'0:00';
   $('#musicProgress').style.width=percent+'%';
+  const miniBar=$('#miniPlayerBar');if(miniBar)miniBar.style.width=percent+'%';
   const bar=$('#musicProgressBar');
   if(bar){
     bar.setAttribute('aria-valuemax',String(Math.round(duration)));
@@ -1813,6 +1938,37 @@ if(musicProgressBar){
   musicProgressBar.title='Нажми или перетащи, чтобы перемотать';
 }
 musicProgressUpdate();
+function miniCoverMarkup(track){
+  if(!track?.cover)return '<span>♪</span>';
+  return `<img src="${escapeHtml(track.cover)}" alt="">`;
+}
+function updateMiniPlayer(){
+  const panel=$('#miniPlayer');if(!panel)return;
+  const track=state.tracks.find(item=>item.id===currentTrack);
+  const playing=!!track&&(embedPlaying||(!audio.paused&&!!audio.src));
+  if(!track){panel.hidden=true;panel.classList.remove('visible');return;}
+  panel.hidden=false;
+  panel.classList.add('visible');
+  const title=$('#miniPlayerTitle'),artist=$('#miniPlayerArtist');
+  if(title)title.textContent=track.title||'Без названия';
+  if(artist)artist.textContent=track.artist||'Исполнитель не указан';
+  const cover=$('#miniPlayerCover');
+  if(cover)cover.innerHTML=miniCoverMarkup(track);
+  const play=$('#miniPlayerPlay');
+  if(play){
+    play.textContent=embedPlaying?'■':(playing?'Ⅱ':'▶');
+    const label=embedPlaying?'Остановить встроенный плеер':(playing?'Пауза':'Воспроизведение');
+    play.setAttribute('aria-label',label);
+    play.title=label;
+  }
+  const bar=$('#miniPlayerBar');
+  if(bar)bar.style.width=embedPlaying?'0%':((()=>{const duration=Number.isFinite(audio.duration)?audio.duration:0;return duration?Math.min(1,(audio.currentTime||0)/duration)*100:0;})()+'%');
+}
+$('#miniPlayerPlay')?.addEventListener('click',()=>{if(currentTrack)playTrack(currentTrack);});
+$('#miniPlayerPrev')?.addEventListener('click',()=>nextTrack(-1));
+$('#miniPlayerNext')?.addEventListener('click',()=>nextTrack(1));
+$('#miniPlayerClose')?.addEventListener('click',()=>stopCurrentTrack());
+$('#miniPlayerCover')?.addEventListener('click',()=>{showView('music');});
 $('#musicSort').onclick=()=>{const modes=['new','day','week','month','year'];musicSort=modes[(modes.indexOf(musicSort)+1)%modes.length];$('#musicSort').textContent=musicSort==='new'?'Все · сначала новые':hits[musicSort];renderMusic();};
 document.addEventListener('change',e=>{if(e.target.matches('.hit-select')){const track=state.tracks.find(t=>t.id===e.target.dataset.track);if(track){track.hit=e.target.value;persist();renderMusic();}}});
 
@@ -2735,7 +2891,7 @@ document.addEventListener('keydown',event=>{
   showSourceGuard();
 },true);
 
-function stopCurrentTrack(){playGeneration++;embedPlaying=false;audio.pause();audio.removeAttribute('src');audio.load();currentTrack='';if(objectURL)URL.revokeObjectURL(objectURL);objectURL='';stopAura();updateVolumeUI();$('#nowPlayingTitle').textContent='Нет активного трека';$('#nowPlayingArtist').textContent='';$('.album-art').innerHTML='<span>♪</span>';$('#playBtn').textContent='▶';$('#musicHero').classList.add('empty-player');$('#musicHero').classList.remove('embed-playing','aura-on');$('#musicProgressBar')?.classList.remove('disabled','seeking');musicProgressUpdate();renderMusic();}
+function stopCurrentTrack(){playGeneration++;embedPlaying=false;audio.pause();audio.removeAttribute('src');audio.load();currentTrack='';if(objectURL)URL.revokeObjectURL(objectURL);objectURL='';stopAura();updateVolumeUI();$('#nowPlayingTitle').textContent='Нет активного трека';$('#nowPlayingArtist').textContent='';$('.album-art').innerHTML='<span>♪</span>';$('#playBtn').textContent='▶';$('#musicHero').classList.add('empty-player');$('#musicHero').classList.remove('embed-playing','aura-on');$('#musicProgressBar')?.classList.remove('disabled','seeking');musicProgressUpdate();updateMiniPlayer();renderMusic();}
 document.addEventListener('click',async e=>{
   const target=e.target.closest('[data-action]');if(!target)return;const {action,id}=target.dataset;
   try {
@@ -2885,6 +3041,7 @@ async function startSession(account, options = {}) {
   }
   state=cloudState||normalizeState(readStore(STORAGE,null)||emptyState());
   if(cloudState){try{localStorage.setItem(STORAGE,JSON.stringify(state));}catch{}}
+  await fetchSiteConfig();
   const warnings=useCloud?cloudWarnings:unreadWarnings(account.id);
   if(!useCloud){
     const record=adminUserRecord(account.id);record.lastSeen=Date.now();saveAdminDb();
@@ -3127,3 +3284,5 @@ async function boot(){
   showAuth(CLOUD_ENABLED||accounts.length?'login':'register');
 }
 boot().catch(error=>{console.error(error);showAuth(CLOUD_ENABLED||accounts.length?'login':'register');});
+setInterval(()=>{if(CLOUD_ENABLED&&currentAccount&&document.visibilityState!=='hidden')refreshSiteConfigAndApply();},60000);
+document.addEventListener('visibilitychange',()=>{if(CLOUD_ENABLED&&currentAccount&&document.visibilityState==='visible')refreshSiteConfigAndApply();});
