@@ -438,13 +438,23 @@ function showView(view) {
   applyCabinetBackground();
   $$('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`));
   $$('.nav-item[data-view]').forEach(el => { el.classList.toggle('active', el.dataset.view === view); el.setAttribute('aria-current', el.dataset.view === view ? 'page' : 'false'); });
-  $('#sidebar').classList.remove('open'); window.scrollTo({top:0,behavior:'smooth'});
+  $('#sidebar').classList.remove('open'); document.body.classList.remove('sidebar-open'); window.scrollTo({top:0,behavior:'smooth'});
   if (view === 'admin') { markAdminSeen(); renderAdmin(); }
   updateAdminAlert();
 }
 $$('.nav-item[data-view]').forEach(el => el.onclick = () => showView(el.dataset.view));
 $$('[data-view-target]').forEach(el => el.onclick = () => showView(el.dataset.viewTarget));
-$('#menuBtn').onclick = () => $('#sidebar').classList.toggle('open');
+const sidebarBackdrop = document.createElement('div');
+sidebarBackdrop.className = 'sidebar-backdrop';
+sidebarBackdrop.setAttribute('aria-hidden', 'true');
+document.body.append(sidebarBackdrop);
+function setSidebarOpen(open){
+  $('#sidebar').classList.toggle('open', open);
+  document.body.classList.toggle('sidebar-open', open);
+}
+$('#menuBtn').onclick = () => setSidebarOpen(!$('#sidebar').classList.contains('open'));
+sidebarBackdrop.addEventListener('click', () => setSidebarOpen(false));
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#sidebar').classList.contains('open')) setSidebarOpen(false); });
 $('.user-mini').setAttribute('role','button'); $('.user-mini').tabIndex = 0;
 $('.user-mini').onclick = e => { if (!e.target.closest('.more')) showView('profile'); };
 $('.user-mini').onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showView('profile'); } };
