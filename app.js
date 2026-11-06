@@ -1959,7 +1959,7 @@ function playPlaylist(id,quiet){
   const list=id==='favorites'?state.tracks.filter(t=>t.favorite):state.tracks.filter(t=>t.playlist===id);
   if(!list.length){toast(id==='favorites'?'В любимых пока нет треков.':'В этом плейлисте пока нет треков.');return;}
   selectedPlaylist=id;renderMusic();
-  const start=(list.find(t=>t.id!==currentTrack&&t.audioUrl!==undefined)||list[0]).id;
+  const start=(list.find(t=>t.id!==currentTrack)||list[0]).id;
   playTrack(start);
 }
 function nextTrack(direction) {
