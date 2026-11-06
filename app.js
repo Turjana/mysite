@@ -883,12 +883,14 @@ function loadShadersRuntime(){
 function destroyCabinetShader(){
   if(cabinetShader){try{cabinetShader.destroy();}catch{}cabinetShader=null;}
   cabinetShaderColors='';
+  clearTimeout(cabinetShaderResizeTimer);
+  if(cabinetShaderResizeBound){window.removeEventListener('resize',handleCabinetShaderResize);cabinetShaderResizeBound=false;}
 }
 async function applyCabinetShader(colors,active){
   if(!colors){destroyCabinetShader();return;}
   const canvas=$('#cabinetBgShader');
   if(!canvas||!navigator.gpu)return;
-  canvas.style.cssText='position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;';
+  canvas.style.cssText='position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;'+(document.body.classList.contains('profile-cabinet-shader')?'display:block;':'');
   if(cabinetShader){
     const key=shaderColorsKey(colors);
     if(key!==cabinetShaderColors){cabinetShader.update(CABINET_SHADER_LAYER,{...colors});cabinetShaderColors=key;}
@@ -898,6 +900,9 @@ async function applyCabinetShader(colors,active){
   if(cabinetShaderBusy)return;
   cabinetShaderBusy=true;
   try{
+    if(!document.body.classList.contains('profile-cabinet-shader'))document.body.classList.add('profile-cabinet-shader');
+    const rect=canvas.getBoundingClientRect();
+    if(rect.width<2||rect.height<2){cabinetShaderBusy=false;return;}
     const {createShader}=await loadShadersRuntime();
     const current=cabinetShaderValue();
     if(!current||!navigator.gpu)return;
@@ -909,12 +914,22 @@ async function applyCabinetShader(colors,active){
     if(shaderColorsKey(fresh)!==shaderColorsKey(current))instance.update(CABINET_SHADER_LAYER,{...fresh});
     const stillActive=!document.body.classList.contains('auth-locked');
     if(!stillActive)instance.pause();
+    if(!cabinetShaderResizeBound){cabinetShaderResizeBound=true;window.addEventListener('resize',handleCabinetShaderResize,{passive:true});}
   }catch(error){
     console.warn('Не удалось запустить живой фон кабинета:',error);
     toast('Живой градиент недоступен: не удалось загрузить шейдер-рантайм. Проверьте интернет или обновите страницу.',true);
   }finally{
     cabinetShaderBusy=false;
   }
+}
+let cabinetShaderResizeTimer=0,cabinetShaderResizeBound=false;
+function handleCabinetShaderResize(){
+  if(!cabinetShader)return;
+  clearTimeout(cabinetShaderResizeTimer);
+  cabinetShaderResizeTimer=setTimeout(()=>{
+    if(!cabinetShader)return;
+    try{cabinetShader.resize&&cabinetShader.resize();}catch{}
+  },160);
 }
 function applyCabinetBackground(){
   const value=cabinetBackgroundValue(),videoValue=cabinetVideoValue(),shaderValue=navigator.gpu?cabinetShaderValue():null;
@@ -1540,7 +1555,7 @@ function editCabinetBackground(){
   if(!isOwner(currentAccount)){toast('Фон личного кабинета может менять только владелец.',true);return;}
   const currentImage=cabinetBackgroundValue(),currentVideo=cabinetVideoValue(),currentShader=cabinetShaderValue();
   const hasBg=!!(currentImage||currentVideo||currentShader);
-  openEditor('Фон личного кабинета',`<p class="help-text">Это фон всей страницы личного кабинета, а не область рядом с аватаркой. Можно загрузить фото или видео до минуты (до 80 МБ) либо включить живой градиент.</p>${field('Фото или видео',input('bg','','file','accept="image/*,video/*"'))}${shaderBgEditorMarkup(currentShader)}${hasBg?'<label class="checkbox-label"><input type="checkbox" name="removeBg"> Удалить текущий фон</label>':''}`,async data=>{
+  openEditor('Фон личного кабинета',`<p class="help-text">Это фон всей страницы личного кабинета, а не область рядом с аватаркой. Можно загрузить фото или видео до минуты (до 80 МБ) либо включить живой градиент — он отображается на всех вкладках.</p>${field('Фото или видео',input('bg','','file','accept="image/*,video/*"'))}${shaderBgEditorMarkup(currentShader)}${hasBg?'<label class="checkbox-label"><input type="checkbox" name="removeBg"> Удалить текущий фон</label>':''}`,async data=>{
     const file=data.get('bg');
     const remove=data.has('removeBg');
     let image=remove?'':currentImage;
