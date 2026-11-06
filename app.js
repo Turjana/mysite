@@ -1725,23 +1725,27 @@ async function embeddedCover(file) {
 }
 const audio=new Audio();audio.preload='metadata';let objectURL='',playGeneration=0,embedPlaying=false,lastAudibleVolume=.85;
 const volumeSlider=$('#volumeSlider'),volumeValue=$('#volumeValue'),muteBtn=$('#muteBtn');
+const playlistVolumeSlider=$('#playlistVolumeSlider'),playlistVolumeValue=$('#playlistVolumeValue'),playlistMuteBtn=$('#playlistVolumeMuteBtn');
 function volumeFromState(){const value=+state?.settings?.volume;return Number.isFinite(value)?Math.min(1,Math.max(0,value)):.85;}
 function updateVolumeUI(){
-  if(!volumeSlider)return;
   const percent=Math.round(audio.volume*100);
-  volumeSlider.value=String(percent);
+  if(volumeSlider)volumeSlider.value=String(percent);
+  if(playlistVolumeSlider){playlistVolumeSlider.value=String(percent);playlistVolumeSlider.disabled=embedPlaying;playlistVolumeSlider.title=embedPlaying?'Громкость встроенного плеера регулируется в сервисе':'Громкость трека';}
   if(volumeValue)volumeValue.textContent=embedPlaying?'в сервисе':`${percent}%`;
-  const muted=percent===0;
-  if(muteBtn){muteBtn.textContent=muted?'🔇':'🔊';muteBtn.title=muted?'Включить звук':'Выключить звук';muteBtn.setAttribute('aria-label',muted?'Включить звук':'Выключить звук');}
-  volumeSlider.disabled=embedPlaying;
-  volumeSlider.closest('.volume-control')?.classList.toggle('is-disabled',embedPlaying);
-  volumeSlider.title=embedPlaying?'Громкость встроенного плеера регулируется в сервисе':'Громкость трека';
+  if(playlistVolumeValue)playlistVolumeValue.textContent=embedPlaying?'—':`${percent}%`;
+  const muted=percent===0,muteLabel=muted?'Включить звук':'Выключить звук';
+  [muteBtn,playlistMuteBtn].forEach(btn=>{if(!btn)return;btn.textContent=muted?'🔇':'🔊';btn.title=muteLabel;btn.setAttribute('aria-label',muteLabel);btn.setAttribute('aria-pressed',String(muted));});
+  if(volumeSlider){volumeSlider.disabled=embedPlaying;volumeSlider.closest('.volume-control')?.classList.toggle('is-disabled',embedPlaying);volumeSlider.title=embedPlaying?'Громкость встроенного плеера регулируется в сервисе':'Громкость трека';}
 }
 function applyVolumeFromState(){audio.volume=volumeFromState();lastAudibleVolume=audio.volume||.85;updateVolumeUI();}
 function commitVolume(){state.settings.volume=audio.volume;persist();}
 volumeSlider?.addEventListener('input',()=>{audio.volume=Math.min(1,Math.max(0,+volumeSlider.value/100));if(audio.volume>0)lastAudibleVolume=audio.volume;updateVolumeUI();});
 volumeSlider?.addEventListener('change',()=>{commitVolume();});
-muteBtn?.addEventListener('click',()=>{if(audio.volume>0){lastAudibleVolume=audio.volume;audio.volume=0;}else audio.volume=lastAudibleVolume||volumeFromState()||.85;commitVolume();updateVolumeUI();});
+function toggleMute(){if(audio.volume>0){lastAudibleVolume=audio.volume;audio.volume=0;}else audio.volume=lastAudibleVolume||volumeFromState()||.85;commitVolume();updateVolumeUI();}
+muteBtn?.addEventListener('click',toggleMute);
+playlistVolumeSlider?.addEventListener('input',()=>{audio.volume=Math.min(1,Math.max(0,+playlistVolumeSlider.value/100));if(audio.volume>0)lastAudibleVolume=audio.volume;updateVolumeUI();});
+playlistVolumeSlider?.addEventListener('change',()=>{commitVolume();});
+playlistMuteBtn?.addEventListener('click',toggleMute);
 let audioContext=null,analyserNode=null,mediaSourceNode=null,mediaStream=null,captureTimer=0,fakeAuraTimer=0,vizRAF=0,vizFreq=null,vizBpm=0,vizBeatAvg=0,vizLastOnset=0,vizOnsets=[],vizSilent=0,vizBeatPulse=0,vizEnergy=0;
 function trackHash(track){return [...String(track?.id||track?.title||'')].reduce((hash,char)=>((hash<<5)-hash+char.charCodeAt(0))|0,0)>>>0;}
 function syntheticMeta(track){return {bpm:88+trackHash(track)%55};}
