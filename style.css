@@ -1249,3 +1249,7 @@ html[data-theme="light"] .shader-opacity-row>label{color:var(--muted)}
   .track-line-actions button,.track-line-link{width:25px;height:25px;font-size:12px}
   .track-line-select{width:92px}
 }
+
+/* v52: вкладки хаба под статистикой профиля */
+.profile-card .profile-hub-tabs{margin:15px 0 0;justify-content:center}
+.profile-hub-panel{min-height:44px}
