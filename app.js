@@ -1874,7 +1874,7 @@ function trackLineMarkup(track){
 }
 function renderMusic() {
   updateNowPlayingLike();
-  $('#musicHero').classList.toggle('empty-player', !currentTrack);
+  $('#musicHero')?.classList.toggle('empty-player', !currentTrack);
   const page=$('#musicPlaylistPage'),library=$('#musicLibrary'),libraryCard=$('#musicLibraryCard');
   const playlist=state.playlists.find(p=>p.id===selectedPlaylist);
   const favoritesView=selectedPlaylist==='favorites';
@@ -2007,10 +2007,13 @@ async function editTrack(id,playlistId) {
 function playEmbed(track){
   audio.pause();if(objectURL){URL.revokeObjectURL(objectURL);objectURL='';}
   currentTrack=track.id;embedPlaying=true;updateVolumeUI();
-  $('#nowPlayingTitle').textContent=track.title;$('#nowPlayingArtist').textContent=`${track.artist||'Исполнитель не указан'}${track.service?` · ${track.service}`:''}`;
-  $('.album-art').innerHTML=`<iframe class="music-embed" src="${escapeHtml(track.embedUrl)}" title="${escapeHtml(track.title)}" allow="autoplay; encrypted-media; fullscreen; clipboard-write" loading="lazy"></iframe>`;
-  $('#musicHero').classList.remove('empty-player');$('#musicHero').classList.add('embed-playing');
-  $('#musicCurrent').textContent='—';$('#musicDuration').textContent='—';$('#musicProgress').style.width='0%';$('#playBtn').textContent='Ⅱ';
+  const titleEl=$('#nowPlayingTitle'),artistEl=$('#nowPlayingArtist'),artEl=$('.album-art'),heroEl=$('#musicHero');
+  if(titleEl)titleEl.textContent=track.title;
+  if(artistEl)artistEl.textContent=`${track.artist||'Исполнитель не указан'}${track.service?` · ${track.service}`:''}`;
+  if(artEl)artEl.innerHTML=`<iframe class="music-embed" src="${escapeHtml(track.embedUrl)}" title="${escapeHtml(track.title)}" allow="autoplay; encrypted-media; fullscreen; clipboard-write" loading="lazy"></iframe>`;
+  if(heroEl){heroEl.classList.remove('empty-player');heroEl.classList.add('embed-playing');}
+  const currentEl=$('#musicCurrent'),durationEl=$('#musicDuration'),progressEl=$('#musicProgress'),playEl=$('#playBtn');
+  if(currentEl)currentEl.textContent='—';if(durationEl)durationEl.textContent='—';if(progressEl)progressEl.style.width='0%';if(playEl)playEl.textContent='Ⅱ';
   const bar=$('#musicProgressBar');if(bar){bar.classList.add('disabled');bar.setAttribute('aria-valuemax','0');bar.setAttribute('aria-valuenow','0');bar.setAttribute('aria-valuetext','Встроенный плеер');}
   startAura(track,{synthetic:true});updateMiniPlayer();renderMusic();
   toast('Трек открыт во встроенном плеере сервиса.');
@@ -2033,7 +2036,8 @@ async function playTrack(id) {
       src=URL.createObjectURL(blob);fromBlob=true;
     }
     audio.pause();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=fromBlob?src:'';audio.src=src;currentTrack=id;embedPlaying=false;updateVolumeUI();updateNowPlayingLike();$('#musicProgressBar')?.classList.remove('disabled');
-    $('#nowPlayingTitle').textContent=track.title;$('#nowPlayingArtist').textContent=track.artist||'Исполнитель не указан';$('.album-art').innerHTML=coverMarkup(track,'playing-cover');$('#musicHero').classList.remove('empty-player','embed-playing');await audio.play();startAura(track);updateMiniPlayer();
+    const titleEl=$('#nowPlayingTitle'),artistEl=$('#nowPlayingArtist'),artEl=$('.album-art'),heroEl=$('#musicHero');
+    if(titleEl)titleEl.textContent=track.title;if(artistEl)artistEl.textContent=track.artist||'Исполнитель не указан';if(artEl)artEl.innerHTML=coverMarkup(track,'playing-cover');if(heroEl)heroEl.classList.remove('empty-player','embed-playing');await audio.play();startAura(track);updateMiniPlayer();
   }catch(error){stopAura();toast(error.message||'Не удалось воспроизвести трек.',true);}
 }
 let musicShuffle=false,musicLoop=false;
@@ -2053,15 +2057,19 @@ function nextTrack(direction) {
   if(musicShuffle&&count>1){do{step=Math.floor(Math.random()*count);}while(step===index);}
   playTrack(list[step].id);
 }
-$('#playBtn').onclick=()=>currentTrack?playTrack(currentTrack):nextTrack(1);$('#prevTrack').onclick=()=>nextTrack(-1);$('#nextTrack').onclick=()=>nextTrack(1);
-audio.onplay=()=>{$('#playBtn').textContent='Ⅱ';updateMiniPlayer();renderMusic();};audio.onpause=()=>{$('#playBtn').textContent='▶';if(!embedPlaying)stopAura();updateMiniPlayer();renderMusic();};audio.onended=()=>{if(musicLoop&&currentTrack){audio.currentTime=0;audio.play().catch(()=>{stopAura();nextTrack(1);});return;}stopAura();nextTrack(1);};audio.onerror=()=>{stopAura();toast('Формат аудио не поддерживается или файл повреждён.',true);};
+const playBtnEl=$('#playBtn'),prevBtnEl=$('#prevTrack'),nextBtnEl=$('#nextTrack');
+if(playBtnEl)playBtnEl.onclick=()=>currentTrack?playTrack(currentTrack):nextTrack(1);
+if(prevBtnEl)prevBtnEl.onclick=()=>nextTrack(-1);
+if(nextBtnEl)nextBtnEl.onclick=()=>nextTrack(1);
+audio.onplay=()=>{const btn=$('#playBtn');if(btn)btn.textContent='Ⅱ';updateMiniPlayer();renderMusic();};audio.onpause=()=>{const btn=$('#playBtn');if(btn)btn.textContent='▶';if(!embedPlaying)stopAura();updateMiniPlayer();renderMusic();};audio.onended=()=>{if(musicLoop&&currentTrack){audio.currentTime=0;audio.play().catch(()=>{stopAura();nextTrack(1);});return;}stopAura();nextTrack(1);};audio.onerror=()=>{stopAura();toast('Формат аудио не поддерживается или файл повреждён.',true);};
 function musicProgressUpdate(){
   const duration=Number.isFinite(audio.duration)?audio.duration:0;
   const current=Math.min(audio.currentTime||0,duration||0);
   const percent=duration?current/duration*100:0;
-  $('#musicCurrent').textContent=timerText(Math.floor(current));
-  $('#musicDuration').textContent=duration?timerText(Math.floor(duration)):'0:00';
-  $('#musicProgress').style.width=percent+'%';
+  const currentEl=$('#musicCurrent'),durationEl=$('#musicDuration'),progressEl=$('#musicProgress');
+  if(currentEl)currentEl.textContent=timerText(Math.floor(current));
+  if(durationEl)durationEl.textContent=duration?timerText(Math.floor(duration)):'0:00';
+  if(progressEl)progressEl.style.width=percent+'%';
   const miniBar=$('#miniPlayerBar');if(miniBar)miniBar.style.width=percent+'%';
   const miniSeek=$('#miniPlayerSeek');
   if(miniSeek){
@@ -3125,7 +3133,7 @@ document.addEventListener('keydown',event=>{
   showSourceGuard();
 },true);
 
-function stopCurrentTrack(){playGeneration++;embedPlaying=false;audio.pause();audio.removeAttribute('src');audio.load();currentTrack='';if(objectURL)URL.revokeObjectURL(objectURL);objectURL='';stopAura();updateVolumeUI();$('#nowPlayingTitle').textContent='Нет активного трека';$('#nowPlayingArtist').textContent='';$('.album-art').innerHTML='<span>♪</span>';$('#playBtn').textContent='▶';$('#musicHero').classList.add('empty-player');$('#musicHero').classList.remove('embed-playing','aura-on');$('#musicProgressBar')?.classList.remove('disabled','seeking');musicProgressUpdate();updateMiniPlayer();renderMusic();}
+function stopCurrentTrack(){playGeneration++;embedPlaying=false;audio.pause();audio.removeAttribute('src');audio.load();currentTrack='';if(objectURL)URL.revokeObjectURL(objectURL);objectURL='';stopAura();updateVolumeUI();const titleEl=$('#nowPlayingTitle'),artistEl=$('#nowPlayingArtist'),artEl=$('.album-art'),playEl=$('#playBtn'),heroEl=$('#musicHero');if(titleEl)titleEl.textContent='Нет активного трека';if(artistEl)artistEl.textContent='';if(artEl)artEl.innerHTML='<span>♪</span>';if(playEl)playEl.textContent='▶';if(heroEl){heroEl.classList.add('empty-player');heroEl.classList.remove('embed-playing','aura-on');}$('#musicProgressBar')?.classList.remove('disabled','seeking');musicProgressUpdate();updateMiniPlayer();renderMusic();}
 document.addEventListener('click',async e=>{
   const target=e.target.closest('[data-action]');if(!target)return;const {action,id}=target.dataset;
   try {
@@ -3499,7 +3507,7 @@ $('#recoveryForm').onsubmit=async e=>{
 
 // Clear the old visual demo counts immediately; no fabricated activity is migrated.
 $('.focus-mini span').textContent='Прогресс задач';
-$('#musicProgress').style.width='0%';
+const initialProgress=$('#musicProgress');if(initialProgress)initialProgress.style.width='0%';
 
 document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='hidden'){saveCloudNow();return;}
