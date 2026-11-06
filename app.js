@@ -35,7 +35,7 @@ const THEME_PRESETS = {
   black:{label:'Чёрный',color:'#000000'}
 };
 const THEME_LABELS = {black:'Чёрная',light:'Светлая'};
-const emptyState = () => ({version:3,tasks:[],goals:[],playlists:[],tracks:[],favoriteArticles:[],gallery:[],profile:{name:'',alias:'',photo:'',photoX:50,photoY:50,photoScale:1,layout:'card',video:'',videoDuration:0,ownerPrefix:'Владелец',status:'✦ В своём ритме'},habits:[{id:uid(),name:'Утренняя зарядка',days:[]},{id:uid(),name:'Читать 20 минут',days:[]}],note:'',theme:'black',accent:'blue',settings:{sound:false,focus:false,morning:false,volume:.85},weather:{city:'Москва',lat:55.7558,lon:37.6173,timezone:'Europe/Moscow',temp:null,code:null,desc:'',updated:0},newsSources:[],newsFeed:[],newsCustom:[],sessions:0});
+const emptyState = () => ({version:3,tasks:[],goals:[],playlists:[],tracks:[],favoriteArticles:[],gallery:[],profile:{name:'',alias:'',photo:'',photoX:50,photoY:50,photoScale:1,layout:'card',video:'',videoDuration:0,ownerPrefix:'Владелец',status:'✦ В своём ритме'},habits:[{id:uid(),name:'Утренняя зарядка',days:[]},{id:uid(),name:'Читать 20 минут',days:[]}],note:'',theme:'black',accent:'blue',settings:{sound:false,focus:false,morning:false,glass:false,volume:.85},weather:{city:'Москва',lat:55.7558,lon:37.6173,timezone:'Europe/Moscow',temp:null,code:null,desc:'',updated:0},newsSources:[],newsFeed:[],newsCustom:[],sessions:0});
 const readStore = (key, fallback = null) => { try { const value = JSON.parse(localStorage.getItem(key)); return value ?? fallback; } catch { return fallback; } };
 function normalizeState(raw) {
   const base = emptyState(), source = raw && typeof raw === 'object' ? raw : {};
@@ -649,6 +649,7 @@ function applyTheme() {
   document.documentElement.style.setProperty('--ambient-b', themeTone(hsl,54,ambient * .86));
   document.documentElement.style.setProperty('--ambient-c', themeTone(hsl,-58,ambient * .8));
   document.documentElement.style.setProperty('--ambient-opacity', light ? '.28' : '0');
+  document.body.classList.toggle('glass-ui', !!state.settings.glass);
 }
 $('#themeBtn').onclick = () => {
   state.theme = state.theme === 'light' ? 'black' : 'light';
@@ -852,6 +853,12 @@ function cabinetShaderValue(){
   for(const key of Object.keys(CABINET_SHADER_DEFAULTS))colors[key]=normalizeHexColor(raw[key])||CABINET_SHADER_DEFAULTS[key];
   return colors;
 }
+function cabinetShaderOpacity(){
+  const raw=state.profile&&state.profile.cabinetBgShader;
+  const value=raw&&raw.opacity!=null?Number(raw.opacity):NaN;
+  if(!isFinite(value))return 100;
+  return Math.min(100,Math.max(0,value));
+}
 let cabinetVideoURL='';
 function resetCabinetVideo(video=$('#cabinetBgVideo')){
   if(!video)return;
@@ -887,10 +894,11 @@ function destroyCabinetShader(){
   if(cabinetShaderResizeBound){window.removeEventListener('resize',handleCabinetShaderResize);cabinetShaderResizeBound=false;}
 }
 async function applyCabinetShader(colors,active){
-  if(!colors){destroyCabinetShader();return;}
   const canvas=$('#cabinetBgShader');
+  if(!colors){destroyCabinetShader();if(canvas)canvas.style.opacity='';return;}
   if(!canvas||!navigator.gpu)return;
   canvas.style.cssText='position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;'+(document.body.classList.contains('profile-cabinet-shader')?'display:block;':'');
+  canvas.style.opacity=(cabinetShaderOpacity()/100).toFixed(3);
   if(cabinetShader){
     const key=shaderColorsKey(colors);
     if(key!==cabinetShaderColors){cabinetShader.update(CABINET_SHADER_LAYER,{...colors});cabinetShaderColors=key;}
@@ -1522,11 +1530,12 @@ async function startShaderPreview(){
     if(token===shaderPreviewToken)shaderPreviewBusy=false;
   }
 }
-function shaderBgEditorMarkup(colors){
+function shaderBgEditorMarkup(colors,opacity){
   const values=colors||CABINET_SHADER_DEFAULTS;
+  if(!isFinite(opacity))opacity=100;
   const labels={colorA:'Цвет A',colorB:'Цвет B',colorC:'Цвет C',colorD:'Цвет D'};
   const cells=Object.keys(CABINET_SHADER_DEFAULTS).map(key=>`<div class="shader-color-cell"><span>${labels[key]}</span><input type="color" name="${key}Pick" value="${values[key]}"><input type="text" name="${key}" value="${values[key]}" maxlength="7" spellcheck="false" aria-label="${labels[key]} HEX"></div>`).join('');
-  return `<label class="checkbox-label"><input type="checkbox" name="shaderBg" ${colors?'checked':''}> Живой градиент «Evening Starling»</label><div class="shader-bg-panel" id="shaderBgPanel" hidden><div class="shader-bg-preview"><canvas id="shaderBgPreview"></canvas></div><div class="shader-color-grid">${cells}</div><p class="help-text" id="shaderBgHint">До четырёх HEX-цветов: #rgb, #rrggbb или без решётки. Градиент заменяет фото/видео-фон и работает на WebGPU.</p></div>`;
+  return `<label class="checkbox-label"><input type="checkbox" name="shaderBg" ${colors?'checked':''}> Живой градиент «Evening Starling»</label><div class="shader-bg-panel" id="shaderBgPanel" hidden><div class="shader-bg-preview"><canvas id="shaderBgPreview"></canvas></div><div class="shader-opacity-row"><label for="shaderOpacity">Прозрачность</label><input type="range" id="shaderOpacity" name="shaderOpacity" min="0" max="100" step="1" value="${opacity}"><output id="shaderOpacityOut">${opacity}%</output></div><div class="shader-color-grid">${cells}</div><p class="help-text" id="shaderBgHint">До четырёх HEX-цветов: #rgb, #rrggbb или без решётки. Градиент заменяет фото/видео-фон и работает на WebGPU.</p></div>`;
 }
 function initShaderBgEditor(){
   const check=$('[name="shaderBg"]',editor),panel=$('#shaderBgPanel',editor);
@@ -1547,15 +1556,23 @@ function initShaderBgEditor(){
       else cell?.classList.add('invalid');
     });
   }
+  const range=$('[name="shaderOpacity"]',editor),out=$('#shaderOpacityOut',editor);
+  if(range)range.addEventListener('input',()=>{
+    const v=Math.min(100,Math.max(0,Math.round(+range.value||0)));
+    range.value=String(v);
+    if(out)out.textContent=v+'%';
+    const main=$('#cabinetBgShader');
+    if(main)main.style.opacity=(v/100).toFixed(3);
+  });
   const sync=()=>{panel.hidden=!check.checked;if(check.checked)startShaderPreview();};
   check.addEventListener('change',sync);
   sync();
 }
 function editCabinetBackground(){
   if(!isOwner(currentAccount)){toast('Фон личного кабинета может менять только владелец.',true);return;}
-  const currentImage=cabinetBackgroundValue(),currentVideo=cabinetVideoValue(),currentShader=cabinetShaderValue();
+  const currentImage=cabinetBackgroundValue(),currentVideo=cabinetVideoValue(),currentShader=cabinetShaderValue(),currentOpacity=cabinetShaderOpacity();
   const hasBg=!!(currentImage||currentVideo||currentShader);
-  openEditor('Фон личного кабинета',`<p class="help-text">Это фон всей страницы личного кабинета, а не область рядом с аватаркой. Можно загрузить фото или видео до минуты (до 80 МБ) либо включить живой градиент — он отображается на всех вкладках.</p>${field('Фото или видео',input('bg','','file','accept="image/*,video/*"'))}${shaderBgEditorMarkup(currentShader)}${hasBg?'<label class="checkbox-label"><input type="checkbox" name="removeBg"> Удалить текущий фон</label>':''}`,async data=>{
+  openEditor('Фон личного кабинета',`<p class="help-text">Это фон всей страницы личного кабинета, а не область рядом с аватаркой. Можно загрузить фото или видео до минуты (до 80 МБ) либо включить живой градиент — он отображается на всех вкладках.</p>${field('Фото или видео',input('bg','','file','accept="image/*,video/*"'))}${shaderBgEditorMarkup(currentShader,currentOpacity)}${hasBg?'<label class="checkbox-label"><input type="checkbox" name="removeBg"> Удалить текущий фон</label>':''}`,async data=>{
     const file=data.get('bg');
     const remove=data.has('removeBg');
     let image=remove?'':currentImage;
@@ -1569,7 +1586,9 @@ function editCabinetBackground(){
         if(!hex)throw new Error('Цвета градиента должны быть в формате HEX, например #cd00ff.');
         colors[key]=hex;
       }
-      shader=colors;image='';videoKey='';
+      const rawOp=Number(data.get('shaderOpacity'));
+      const op=isFinite(rawOp)?Math.min(100,Math.max(0,Math.round(rawOp))):100;
+      shader={...colors,opacity:op};image='';videoKey='';
     }else if(file?.size){
       if(file.type.startsWith('image/')){
         image=await imageData(file,1920,.84);
@@ -2035,7 +2054,7 @@ $('#musicSort').onclick=()=>{const modes=['new','day','week','month','year'];mus
 document.addEventListener('change',e=>{if(e.target.matches('.hit-select')){const track=state.tracks.find(t=>t.id===e.target.dataset.track);if(track){track.hit=e.target.value;persist();renderMusic();}}});
 
 // Settings only expose actions that have a real local implementation.
-$('.preferences').innerHTML=`<div id="themePreferences"></div><div class="preference-row" id="accountPreference"></div><div class="preference-row"><div><strong>Утренний план</strong><span>Показывать напоминание при открытии после 08:00</span></div><button class="toggle" data-setting="morning" aria-label="Утренний план"><i></i></button></div><div class="preference-row"><div><strong>Звук выполнения</strong><span>Короткий сигнал при завершении задачи</span></div><button class="toggle" data-setting="sound" aria-label="Звук выполнения"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать колокольчик напоминаний</span></div><button class="toggle" data-setting="focus" aria-label="Фокус-режим"><i></i></button></div><div id="securityPreferences"></div><div class="preference-row"><div><strong>Хранение данных</strong><span>${CLOUD_ENABLED?'Синхронизируется с облаком Supabase. Аудио и видео — в этом браузере.':'Автоматически в этом браузере. Аудио и видео — в IndexedDB.'}</span></div>${button('export','','Экспорт данных')}</div>`;
+$('.preferences').innerHTML=`<div id="themePreferences"></div><div class="preference-row" id="accountPreference"></div><div class="preference-row"><div><strong>Утренний план</strong><span>Показывать напоминание при открытии после 08:00</span></div><button class="toggle" data-setting="morning" aria-label="Утренний план"><i></i></button></div><div class="preference-row"><div><strong>Звук выполнения</strong><span>Короткий сигнал при завершении задачи</span></div><button class="toggle" data-setting="sound" aria-label="Звук выполнения"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать колокольчик напоминаний</span></div><button class="toggle" data-setting="focus" aria-label="Фокус-режим"><i></i></button></div><div class="preference-row"><div><strong>Стеклянный интерфейс</strong><span>Размытие фона и полупрозрачные панели</span></div><button class="toggle" data-setting="glass" aria-label="Стеклянный интерфейс"><i></i></button></div><div id="securityPreferences"></div><div class="preference-row"><div><strong>Хранение данных</strong><span>${CLOUD_ENABLED?'Синхронизируется с облаком Supabase. Аудио и видео — в этом браузере.':'Автоматически в этом браузере. Аудио и видео — в IndexedDB.'}</span></div>${button('export','','Экспорт данных')}</div>`;
 function renderThemePreferences(){
   const box=$('#themePreferences'); if(!box)return;
   const previewColor=themeAccentColor(state.accent,state.theme);
@@ -2059,7 +2078,7 @@ function renderSettings(){
   if(account)account.innerHTML=currentAccount?`<div><strong>Аккаунт</strong><span>${escapeHtml(currentAccount.email)} · @${escapeHtml(currentAccount.alias)}</span></div><button class="secondary-btn" data-action="logout">Выйти</button>`:'';
 }
 function updateSettingsCity(){ const el=$('#settingsWeatherCity'); if(el)el.textContent=state.weather.city; }
-$$('[data-setting]').forEach(el=>el.onclick=()=>{state.settings[el.dataset.setting]=!state.settings[el.dataset.setting];logAction('изменил настройки',`${el.getAttribute('aria-label')}: ${state.settings[el.dataset.setting]?'вкл':'выкл'}`);persist();renderSettings();});
+$$('[data-setting]').forEach(el=>el.onclick=()=>{state.settings[el.dataset.setting]=!state.settings[el.dataset.setting];logAction('изменил настройки',`${el.getAttribute('aria-label')}: ${state.settings[el.dataset.setting]?'вкл':'выкл'}`);persist();renderSettings();if(el.dataset.setting==='glass')applyTheme();});
 function completionSound(){if(!state.settings.sound)return;try{const ctx=new (window.AudioContext||window.webkitAudioContext)(),osc=ctx.createOscillator(),gain=ctx.createGain();osc.connect(gain);gain.connect(ctx.destination);osc.frequency.value=660;gain.gain.setValueAtTime(.07,ctx.currentTime);gain.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+.2);osc.start();osc.stop(ctx.currentTime+.22);osc.onended=()=>ctx.close();}catch{}}
 
 // --- Owner-only admin database -------------------------------------------
@@ -2489,17 +2508,17 @@ document.body.insertAdjacentHTML('beforeend', `
   <div class="support-identity" id="supportIdentity"></div>
   <div class="support-messages" id="supportMessages"></div>
   <p class="support-status" id="supportStatus" role="alert"></p>
-  <form class="support-form" id="supportForm"><label class="support-attach" title="Прикрепить фото, аудио или документ"><span>📎</span><input id="supportFile" type="file" accept="image/*,audio/*,.pdf,.doc,.docx,.txt,.rtf,.csv,.xls,.xlsx,.ppt,.pptx,.zip,.rar,.7z,.epub"></label><div class="support-file-chip" id="supportFileChip" hidden></div><textarea id="supportInput" rows="2" maxlength="2000" placeholder="Напишите сообщение… Enter — отправить, Shift+Enter — новая строка"></textarea><button class="primary-btn" type="submit" id="supportSend">Отправить</button></form>
+  <form class="support-form" id="supportForm"><label class="support-attach" title="Прикрепить фото, аудио или документ"><span class="support-attach-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.53 12.53 21a5.48 5.48 0 0 1-7.75-7.75l8.4-8.4a3.65 3.65 0 0 1 5.17 5.17l-8.4 8.4a1.83 1.83 0 0 1-2.59-2.59l7.9-7.9"/></svg></span><input id="supportFile" type="file" accept="image/*,audio/*,.pdf,.doc,.docx,.txt,.rtf,.csv,.xls,.xlsx,.ppt,.pptx,.zip,.rar,.7z,.epub"></label><div class="support-file-chip" id="supportFileChip" hidden></div><textarea id="supportInput" rows="2" maxlength="2000" placeholder="Напишите сообщение… Enter — отправить, Shift+Enter — новая строка"></textarea><button class="primary-btn" type="submit" id="supportSend">Отправить</button></form>
 </dialog>
 <dialog id="adminSupportDialog" class="support-dialog admin-support-dialog card" aria-labelledby="adminSupportTitle">
   <button type="button" class="modal-close" id="adminSupportClose" aria-label="Закрыть">×</button>
   <header class="support-head"><span class="support-mark">✉</span><div><p class="eyebrow">ПОДДЕРЖКА · ДИАЛОГ</p><h2 id="adminSupportTitle">Обращение</h2><span id="adminSupportSub"></span><i class="presence offline" id="adminSupportPresence">Проверяем статус…</i></div><button type="button" class="text-btn admin-support-hide" id="adminSupportHide" hidden>Удалить у себя</button></header>
   <div class="support-messages" id="adminSupportMessages"></div>
   <p class="support-status" id="adminSupportStatus" role="alert"></p>
-  <form class="support-form" id="adminSupportForm"><label class="support-attach" title="Прикрепить фото, аудио или документ"><span>📎</span><input id="adminSupportFile" type="file" accept="image/*,audio/*,.pdf,.doc,.docx,.txt,.rtf,.csv,.xls,.xlsx,.ppt,.pptx,.zip,.rar,.7z,.epub"></label><div class="support-file-chip" id="adminSupportFileChip" hidden></div><textarea id="adminSupportInput" rows="2" maxlength="2000" placeholder="Ответ пользователю… Enter — отправить, Shift+Enter — новая строка"></textarea><button class="primary-btn" type="submit">Ответить</button></form>
+  <form class="support-form" id="adminSupportForm"><label class="support-attach" title="Прикрепить фото, аудио или документ"><span class="support-attach-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.53 12.53 21a5.48 5.48 0 0 1-7.75-7.75l8.4-8.4a3.65 3.65 0 0 1 5.17 5.17l-8.4 8.4a1.83 1.83 0 0 1-2.59-2.59l7.9-7.9"/></svg></span><input id="adminSupportFile" type="file" accept="image/*,audio/*,.pdf,.doc,.docx,.txt,.rtf,.csv,.xls,.xlsx,.ppt,.pptx,.zip,.rar,.7z,.epub"></label><div class="support-file-chip" id="adminSupportFileChip" hidden></div><textarea id="adminSupportInput" rows="2" maxlength="2000" placeholder="Ответ пользователю… Enter — отправить, Shift+Enter — новая строка"></textarea><button class="primary-btn" type="submit">Ответить</button></form>
 </dialog>
 <dialog id="adminLogDialog" class="admin-log-dialog card" aria-labelledby="adminLogTitle">
-  <div class="admin-log-dialog-head"><div><p class="eyebrow">АУДИТ</p><h2 id="adminLogTitle">Журнал действий</h2></div><label class="admin-search admin-log-search"><span>⌕</span><input id="adminLogSearch" type="search" placeholder="Поиск по действию, пользователю, деталям" autocomplete="off" /></label><button type="button" class="modal-close" id="adminLogClose" aria-label="Закрыть">×</button></div>
+  <div class="admin-log-dialog-head"><div><h2 id="adminLogTitle">Журнал действий</h2></div><label class="admin-search admin-log-search"><span>⌕</span><input id="adminLogSearch" type="search" placeholder="Поиск по действию, пользователю, деталям" autocomplete="off" /></label><button type="button" class="modal-close" id="adminLogClose" aria-label="Закрыть">×</button></div>
   <div class="admin-log-dialog-body"><div class="admin-log-full-list" id="adminLogFullList"></div><aside class="admin-log-detail" id="adminLogDetail"></aside></div>
 </dialog>
 <dialog id="adminPhotoDialog" class="admin-photo-dialog card" aria-labelledby="adminPhotoTitle">
