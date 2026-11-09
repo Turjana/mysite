@@ -22,6 +22,21 @@ const ACCOUNT_PREFIX = 'sphere-state:';
 const SUPABASE_URL = 'https://kfowalcxzrtzpucxeqon.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtmb3dhbGN4enJ0enB1Y3hlcW9uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMyOTg2NzksImV4cCI6MjEwODg3NDY3OX0.rl8DxiWv4e6vlpOIOQknqj9yKTVniWXp8pZ1WFwfOlU';
 const CLOUD_ENABLED = /^https:\/\/.+\.supabase\.co$/i.test(SUPABASE_URL) && SUPABASE_ANON_KEY.length > 40;
+// --- Оплата через СБП -----------------------------------------------------
+// Чтобы принимать настоящие платежи, вставьте ссылку СБП (её выдаёт банк или
+// платёжный провайдер, например ЮKassa / CloudPayments / Т-Банк) и переключите
+// mode на 'live'. В демо-режиме деньги не списываются.
+const PAYMENT_CONFIG = {
+  amount: 10,
+  currency: '₽',
+  method: 'СБП',
+  bank: 'Сбербанк',
+  merchantName: 'Сфера',
+  mode: 'demo',        // 'demo' | 'live'
+  sbpLink: '',         // например https://qr.nspk.ru/...
+  qrImage: '',         // прямая ссылка на картинку QR (если даёт провайдер)
+  checkoutUrl: ''      // необязательно: страница оплаты провайдера
+};
 const priorityLabels = {urgent:'Срочный',medium:'Средний',low:'Не срочный'};
 const priorityRank = {urgent:0,medium:1,low:2};
 const normalizePriority = value => ({blue:'low',orange:'medium',purple:'urgent'}[value] || (priorityLabels[value] ? value : 'medium'));
@@ -449,6 +464,20 @@ function showView(view) {
   updateAdminAlert();
 }
 const SITE_UPDATES = [
+  {version:'v62', items:[
+    'Тексты треков и выбор категории в списке убраны',
+    'Шрифт Sora для текста и заголовков',
+    'Сердечко, карандаш и крестик у треков крупнее на 10px',
+    'В мини-плеере громкость показывается в процентах',
+    'Стрелки мини-плеера заменены на SVG-иконки',
+    'Обложка в мини-плеере заполняет блок без фона',
+    'Пробел ставит трек на паузу и возобновляет воспроизведение'
+  ]},
+  {version:'v61', date:'9 ноября 2026', items:[
+    'Новый раздел «Оплата»: платёж 10 ₽ через СБП на Сбербанк',
+    'QR-код, кнопка открытия ссылки СБП и копирование ссылки',
+    'Демо-режим формы до подключения реального приёма платежей'
+  ]},
   {version:'v60', items:[
     'Журнал обновлений без дат',
     'Мини-плеер раскрывается при наведении — шкала громкости',
@@ -1887,7 +1916,7 @@ async function embeddedCover(file) {
 const audio=new Audio();audio.preload='metadata';let objectURL='',playGeneration=0,embedPlaying=false,lastAudibleVolume=.85;
 const volumeSlider=$('#volumeSlider'),volumeValue=$('#volumeValue'),muteBtn=$('#muteBtn');
 const playlistVolumeSlider=$('#playlistVolumeSlider'),playlistVolumeValue=$('#playlistVolumeValue'),playlistMuteBtn=$('#playlistVolumeMuteBtn');
-const miniVolumeSlider=$('#miniPlayerVolume');
+const miniVolumeSlider=$('#miniPlayerVolume'),miniVolumeValue=$('#miniPlayerVolumeValue');
 function volumeFromState(){const value=+state?.settings?.volume;return Number.isFinite(value)?Math.min(1,Math.max(0,value)):.85;}
 function updateVolumeUI(){
   const percent=Math.round(audio.volume*100);
@@ -1896,6 +1925,7 @@ function updateVolumeUI(){
   if(volumeValue)volumeValue.textContent=embedPlaying?'в сервисе':`${percent}%`;
   if(playlistVolumeValue)playlistVolumeValue.textContent=embedPlaying?'—':`${percent}%`;
   if(miniVolumeSlider){miniVolumeSlider.value=String(percent);miniVolumeSlider.disabled=embedPlaying;miniVolumeSlider.title=embedPlaying?'Громкость встроенного плеера регулируется в сервисе':'Громкость трека';}
+  if(miniVolumeValue)miniVolumeValue.textContent=embedPlaying?'—':`${percent}%`;
   const muted=percent===0,muteLabel=muted?'Включить звук':'Выключить звук';
   [muteBtn,playlistMuteBtn].forEach(btn=>{if(!btn)return;btn.textContent=muted?'🔇':'🔊';btn.title=muteLabel;btn.setAttribute('aria-label',muteLabel);btn.setAttribute('aria-pressed',String(muted));});
   if(volumeSlider){volumeSlider.disabled=embedPlaying;volumeSlider.closest('.volume-control')?.classList.toggle('is-disabled',embedPlaying);volumeSlider.title=embedPlaying?'Громкость встроенного плеера регулируется в сервисе':'Громкость трека';}
@@ -2047,7 +2077,7 @@ function trackLineMarkup(track){
         <button type="button" data-action="track-edit" data-id="${track.id}" title="Изменить трек" aria-label="Изменить трек">✎</button>
         <button type="button" data-action="track-delete" data-id="${track.id}" title="Удалить трек" aria-label="Удалить трек">×</button>
       </div>
-      <div class="track-line-artist"><span>${escapeHtml(track.artist||'Исполнитель не указан')}${track.service?` · ${escapeHtml(track.service)}`:''}</span><select class="hit-select track-line-select" data-track="${track.id}" aria-label="Категория ${escapeHtml(track.title)}">${Object.entries(hits).map(([key,label])=>`<option value="${key}" ${key===track.hit?'selected':''}>${label}</option>`).join('')}</select></div>
+      <div class="track-line-artist"><span>${escapeHtml(track.artist||'Исполнитель не указан')}${track.service?` · ${escapeHtml(track.service)}`:''}</span></div>
     </div>
   </div>`;
 }
@@ -2169,7 +2199,7 @@ async function editTrack(id,playlistId) {
   const track=state.tracks.find(t=>t.id===id),playlists=state.playlists;
   if(!playlists.length){playlistEditor(null);return;}
   openEditor('Изменить трек',
-    field('Название',input('title',track?.title||'','text','required maxlength="160"'))+field('Исполнитель',input('artist',track?.artist||'','text','maxlength="120"'))+field('Текст трека',`<textarea name="lyrics" rows="5" maxlength="12000" placeholder="Текст песни или заметка">${escapeHtml(track?.lyrics||'')}</textarea>`)+
+    field('Название',input('title',track?.title||'','text','required maxlength="160"'))+field('Исполнитель',input('artist',track?.artist||'','text','maxlength="120"'))+
     field('Плейлист',`<select name="playlist">${playlists.map(p=>`<option value="${p.id}" ${p.id===(track?.playlist||playlistId)?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select>`)+
     field('Заменить аудиофайл (необязательно)',input('audio','','file','accept="audio/*"'))+
     (track?.sourceUrl?`<p class="help-text">Источник: <a class="source-link" href="${escapeHtml(track.sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(track.service||track.sourceUrl)}</a></p>`:'<p class="help-text">Для MP3 обложка читается из ID3 автоматически.</p>')+
@@ -2179,7 +2209,7 @@ async function editTrack(id,playlistId) {
       let cover=track?.cover||'';
       if(file?.size){if(!file.type.startsWith('audio/')&&!/\.(mp3|m4a|ogg|wav|flac)$/i.test(file.name))throw new Error('Выберите аудиофайл.');cover=await embeddedCover(file)||cover;await audioStore('put',id,file);}
       const duration=file?.size?await trackDuration(file):(+track?.duration||0);
-      const record={...track,id,title,artist:String(data.get('artist')).trim(),lyrics:String(data.get('lyrics')||'').slice(0,12000),playlist:String(data.get('playlist')),hit:String(data.get('hit')),cover,duration,created:track?.created||Date.now(),favorite:!!track?.favorite,audioUrl:file?.size?'':track?.audioUrl};
+      const record={...track,id,title,artist:String(data.get('artist')).trim(),playlist:String(data.get('playlist')),hit:String(data.get('hit')),cover,duration,created:track?.created||Date.now(),favorite:!!track?.favorite,audioUrl:file?.size?'':track?.audioUrl};
       if(file?.size){const oldPath=track?.cloudPath||'';const path=await uploadTrackMedia(record,file,file);if(path&&oldPath&&oldPath!==path)deleteTrackMedia({cloudPath:oldPath});}
       if(track)state.tracks[state.tracks.indexOf(track)]=record;else state.tracks.push(record);
       logAction(track?'изменил трек':'добавил трек',`«${title}»${record.artist?` · ${record.artist}`:''}`,id);
@@ -2401,7 +2431,20 @@ $('#playerLoop')?.addEventListener('click',()=>setMusicLoop(!musicLoop));
 syncMusicToggles();
 $('#miniPlayerClose')?.addEventListener('click',()=>stopCurrentTrack());
 $('#miniPlayerCover')?.addEventListener('click',()=>{showView('music');});
+
+document.addEventListener('keydown',e=>{
+  if(e.code!=='Space'&&e.key!==' ')return;
+  const target=e.target;
+  const typing=target&&(target.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName||''));
+  if(typing)return;
+  if(document.querySelector('dialog[open]'))return;
+  if(!currentTrack)return;
+  e.preventDefault();
+  playTrack(currentTrack);
+});
+
 function openTrackLyrics(track){
+  return;
   const panel=$('#trackLyrics'); if(!panel||!track)return;
   const title=$('#trackLyricsTitle'),body=$('#trackLyricsBody');
   if(title)title.textContent=track.title||'Трек';
@@ -2416,7 +2459,7 @@ function closeTrackLyrics(){
   setTimeout(()=>{if(!panel.classList.contains('open'))panel.hidden=true;},340);
 }
 $('#trackLyricsClose')?.addEventListener('click',closeTrackLyrics);
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closeTrackLyrics();});
+
 function savePlaybackState(force){
   const now=Date.now();
   if(!force&&now-playbackSaveAt<1500)return;
@@ -2566,6 +2609,51 @@ function renderSettings(){
 function updateSettingsCity(){ const el=$('#settingsWeatherCity'); if(el)el.textContent=state.weather.city; }
 $$('[data-setting]').forEach(el=>el.onclick=()=>{state.settings[el.dataset.setting]=!state.settings[el.dataset.setting];logAction('изменил настройки',`${el.getAttribute('aria-label')}: ${state.settings[el.dataset.setting]?'вкл':'выкл'}`);persist();renderSettings();if(el.dataset.setting==='glass')applyTheme();});
 function completionSound(){if(!state.settings.sound)return;try{const ctx=new (window.AudioContext||window.webkitAudioContext)(),osc=ctx.createOscillator(),gain=ctx.createGain();osc.connect(gain);gain.connect(ctx.destination);osc.frequency.value=660;gain.gain.setValueAtTime(.07,ctx.currentTime);gain.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+.2);osc.start();osc.stop(ctx.currentTime+.22);osc.onended=()=>ctx.close();}catch{}}
+
+// --- Оплата через СБП -----------------------------------------------------
+const PAYMENT_QR_PLACEHOLDER='<div class="payment-qr-empty"><span>▦</span><small>QR-код появится после подключения оплаты</small></div>';
+function paymentLink(){return String(PAYMENT_CONFIG.sbpLink||'').trim();}
+function paymentIsLive(){return PAYMENT_CONFIG.mode==='live'&&!!(paymentLink()||PAYMENT_CONFIG.qrImage||PAYMENT_CONFIG.checkoutUrl);}
+function renderPayment(){
+  const chip=$('#paymentModeChip');
+  if(chip){const live=paymentIsLive();chip.textContent=live?'● подключено':'● демо-режим';chip.classList.toggle('ready',live);}
+  const qr=$('#paymentQr');
+  if(qr){
+    const image=PAYMENT_CONFIG.qrImage||(paymentLink()?`https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${encodeURIComponent(paymentLink())}`:'');
+    qr.innerHTML=image?`<img src="${escapeHtml(image)}" alt="QR-код для оплаты через СБП" />`:PAYMENT_QR_PLACEHOLDER;
+  }
+  const open=$('#paymentOpenLink'); if(open)open.disabled=!paymentLink()&&!PAYMENT_CONFIG.checkoutUrl;
+  const copy=$('#paymentCopyLink'); if(copy)copy.hidden=!paymentLink();
+  const note=$('#paymentNote'); if(note)note.textContent=paymentIsLive()?'':'Форма работает в демо-режиме: настоящий платёж не создаётся. Укажите ссылку СБП в PAYMENT_CONFIG.';
+}
+function paymentTarget(){return String(PAYMENT_CONFIG.checkoutUrl||paymentLink()||'').trim();}
+function openPaymentTarget(){
+  const url=paymentTarget();
+  if(!url){toast('Оплата ещё не подключена: добавьте ссылку СБП в PAYMENT_CONFIG.',true);return false;}
+  window.open(url,'_blank','noopener');
+  return true;
+}
+$('#paymentOpenLink')?.addEventListener('click',openPaymentTarget);
+$('#paymentCopyLink')?.addEventListener('click',async()=>{
+  const url=paymentLink(); if(!url)return;
+  try{await navigator.clipboard.writeText(url);toast('Ссылка на оплату скопирована');}
+  catch{toast('Не удалось скопировать ссылку',true);}
+});
+$('#paymentSupport')?.addEventListener('click',openSupportDialog);
+$('#paymentForm')?.addEventListener('submit',event=>{
+  event.preventDefault();
+  const email=String($('#paymentEmail')?.value||'').trim();
+  const consent=$('#paymentConsent');
+  const note=$('#paymentNote');
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){if(note)note.textContent='Укажите корректный email для чека.';return;}
+  if(consent&&!consent.checked){if(note)note.textContent='Подтвердите согласие с условиями оплаты.';return;}
+  if(!paymentIsLive()){
+    if(note)note.textContent='Это демо-режим. Чтобы принимать реальные платежи, подключите СБП — инструкция в файле «ОПЛАТА-СБП.md».';
+    toast('Демо-режим: реальный платёж не создан');
+    return;
+  }
+  if(openPaymentTarget()&&note)note.textContent='Открыли страницу оплаты. После подтверждения банком вернитесь сюда.';
+});
 
 // --- Owner-only admin database -------------------------------------------
 let adminSearch='',adminUsers=[],adminEvents=[],adminLoadedAt=0,adminRefreshSeq=0,adminRenderSignature='';
@@ -3506,7 +3594,7 @@ document.addEventListener('keydown',e=>{
   e.preventDefault();
   selectedPlaylist=card.dataset.playlist;renderMusic();
 });
-function renderAll(){renderTasks();renderCalendar();renderGoals();renderProfile();renderHabits();renderMusic();renderNews();renderSettings();updateSettingsCity();updateAdminAccess();if(activeView==='admin')renderAdmin();}
+function renderAll(){renderTasks();renderCalendar();renderGoals();renderProfile();renderHabits();renderMusic();renderNews();renderSettings();renderPayment();updateSettingsCity();updateAdminAccess();if(activeView==='admin')renderAdmin();}
 function saveAndRender(){persist();renderAll();}
 
 const accountKey = account => ACCOUNT_PREFIX + account.id;
