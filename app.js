@@ -1709,6 +1709,82 @@ function audioDB() {
 async function audioStore(mode,key,value) {
   const db=await audioDB();return new Promise((resolve,reject)=>{const tx=db.transaction('audio',mode==='get'?'readonly':'readwrite'),store=tx.objectStore('audio');const req=mode==='get'?store.get(key):mode==='put'?store.put(value,key):store.delete(key);tx.oncomplete=()=>resolve(req.result);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});
 }
+// --- Синхронизация аудио между устройствами (Supabase Storage) ---
+const MEDIA_BUCKET='sphere-audio';
+let mediaSyncing=false;
+function mediaPathUrl(path,publicUrl){
+  const clean=String(path||'').split('/').map(encodeURIComponent).join('/');
+  return `${SUPABASE_URL}/storage/v1/object/${publicUrl?'public/':''}${MEDIA_BUCKET}/${clean}`;
+}
+function mediaPublicUrl(path){return mediaPathUrl(path,true);}
+function mediaExt(file){
+  const match=/\.([a-z0-9]{2,5})$/i.exec(String(file?.name||''));
+  if(match)return match[1].toLowerCase();
+  const type=String(file?.type||'').split('/')[1]||'bin';
+  return type.replace(/[^a-z0-9]/gi,'').toLowerCase()||'bin';
+}
+async function uploadTrackMedia(track,blob,file){
+  if(!CLOUD_ENABLED||!currentAccount?.id||!track?.id||!blob?.size)return '';
+  if(blob.size>45*1024*1024)return '';
+  const path=`${currentAccount.id}/${track.id}.${mediaExt(file||blob)}`;
+  try{
+    const response=await fetch(mediaPathUrl(path,false),{method:'POST',headers:{apikey:SUPABASE_ANON_KEY,Authorization:`Bearer ${SUPABASE_ANON_KEY}`,'x-upsert':'true','Content-Type':blob.type||'application/octet-stream'},body:blob});
+    if(!response.ok)return '';
+    track.cloudPath=path;
+    return path;
+  }catch{return '';}
+}
+async function deleteTrackMedia(track){
+  if(!CLOUD_ENABLED||!track?.cloudPath)return;
+  try{await fetch(mediaPathUrl(track.cloudPath,false),{method:'DELETE',headers:{apikey:SUPABASE_ANON_KEY,Authorization:`Bearer ${SUPABASE_ANON_KEY}`}});}catch{}
+}
+function cacheCloudAudio(track){
+  if(!track?.cloudPath)return;
+  audioStore('get',track.id).then(existing=>{
+    if(existing)return null;
+    return fetch(mediaPublicUrl(track.cloudPath)).then(response=>response.ok?response.blob():null).then(blob=>blob?.size?audioStore('put',track.id,blob):null);
+  }).catch(()=>{});
+}
+function offerTrackUpload(track){
+  if(!track)return;
+  openEditor('Аудиофайл не найден',
+    `<p class="help-text">Файл «${escapeHtml(track.title)}» хранится только на том устройстве, где трек был добавлен. Выбери этот аудиофайл здесь — он привяжется к треку и загрузится в облако.</p>`+field('Аудиофайл',input('audio','','file','accept="audio/*,.mp3,.m4a,.ogg,.wav,.flac,.aac,.opus" required')),
+    async data=>{
+      const file=data.get('audio');
+      if(!file?.size)throw new Error('Выберите аудиофайл.');
+      if(file.size>150*1024*1024)throw new Error('Максимальный размер аудиофайла — 150 МБ.');
+      await audioStore('put',track.id,file);
+      const duration=await trackDuration(file);
+      if(duration)track.duration=duration;
+      const path=await uploadTrackMedia(track,file,file);
+      persist();renderMusic();
+      toast(path?'Файл привязан к треку и загружен в облако':'Файл привязан к треку');
+      playTrack(track.id);
+    },'Привязать файл');
+}
+async function syncMediaToCloud(){
+  if(!CLOUD_ENABLED){toast('Облако не настроено.',true);return;}
+  if(!currentAccount?.id){toast('Войди в аккаунт, чтобы синхронизировать аудио.',true);return;}
+  if(mediaSyncing){toast('Синхронизация уже идёт.');return;}
+  const list=state.tracks.filter(track=>!track.cloudPath&&!track.embedUrl);
+  if(!list.length){toast('Все аудиофайлы уже синхронизированы.');return;}
+  mediaSyncing=true;
+  toast(`Загружаю аудио: ${list.length}…`);
+  let done=0,failed=0;
+  for(const track of list){
+    try{
+      const blob=await audioStore('get',track.id);
+      if(!blob){failed++;continue;}
+      const path=await uploadTrackMedia(track,blob);
+      if(path)done++;else failed++;
+    }catch{failed++;}
+  }
+  mediaSyncing=false;
+  if(done)persist();
+  if(!done)toast('Не удалось загрузить аудио. Проверь облачное хранилище.',true);
+  else if(failed)toast(`Синхронизировано: ${done}. Не удалось: ${failed}.`,true);
+  else toast(`Аудио синхронизировано: ${done}`);
+}
 // Read ID3v2 APIC for the original embedded MP3 cover, without replacing it with a random picture.
 async function embeddedCover(file) {
   const buffer=await file.slice(0,8*1024*1024).arrayBuffer(),bytes=new Uint8Array(buffer),view=new DataView(buffer);
@@ -1988,7 +2064,9 @@ function addTrackDialog(playlistId){
         const id=uid(),meta=trackMetaFromFileName(file.name),cover=await embeddedCover(file).catch(()=>'');
         await audioStore('put',id,file);
         const duration=await trackDuration(file);
-        addedTracks.push({id,title:meta.title,artist:meta.artist,playlist,hit,favorite:false,created:Date.now()+addedTracks.length,cover,duration});
+        const record={id,title:meta.title,artist:meta.artist,playlist,hit,favorite:false,created:Date.now()+addedTracks.length,cover,duration};
+        await uploadTrackMedia(record,file,file);
+        addedTracks.push(record);
       }
       state.tracks.push(...addedTracks);
       selectedPlaylist=playlist;
@@ -2013,6 +2091,7 @@ async function editTrack(id,playlistId) {
       if(file?.size){if(!file.type.startsWith('audio/')&&!/\.(mp3|m4a|ogg|wav|flac)$/i.test(file.name))throw new Error('Выберите аудиофайл.');cover=await embeddedCover(file)||cover;await audioStore('put',id,file);}
       const duration=file?.size?await trackDuration(file):(+track?.duration||0);
       const record={...track,id,title,artist:String(data.get('artist')).trim(),playlist:String(data.get('playlist')),hit:String(data.get('hit')),cover,duration,created:track?.created||Date.now(),favorite:!!track?.favorite,audioUrl:file?.size?'':track?.audioUrl};
+      if(file?.size){const oldPath=track?.cloudPath||'';const path=await uploadTrackMedia(record,file,file);if(path&&oldPath&&oldPath!==path)deleteTrackMedia({cloudPath:oldPath});}
       if(track)state.tracks[state.tracks.indexOf(track)]=record;else state.tracks.push(record);
       logAction(track?'изменил трек':'добавил трек',`«${title}»${record.artist?` · ${record.artist}`:''}`,id);
       saveAndRender();toast('Трек сохранён');
@@ -2046,8 +2125,14 @@ async function playTrack(id) {
     let src=track.audioUrl||'',fromBlob=false;
     if(!src){
       const blob=await audioStore('get',id);if(generation!==playGeneration)return;
-      if(!blob){if(track.sourceUrl){toast('Прямой аудиопоток недоступен. Открой источник по ссылке ↗',true);return;}throw new Error('Аудиофайл не найден. Добавь его повторно.');}
-      src=URL.createObjectURL(blob);fromBlob=true;
+      if(!blob){
+        if(track.cloudPath){src=mediaPublicUrl(track.cloudPath);cacheCloudAudio(track);}
+        else if(track.sourceUrl){toast('Прямой аудиопоток недоступен. Открой источник по ссылке ↗',true);return;}
+        else{offerTrackUpload(track);return;}
+      }else{
+        src=URL.createObjectURL(blob);fromBlob=true;
+        if(!track.cloudPath){uploadTrackMedia(track,blob).then(path=>{if(path)persist();});}
+      }
     }
     audio.pause();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=fromBlob?src:'';audio.src=src;currentTrack=id;embedPlaying=false;updateVolumeUI();updateNowPlayingLike();$('#musicProgressBar')?.classList.remove('disabled');
     const titleEl=$('#nowPlayingTitle'),artistEl=$('#nowPlayingArtist'),artEl=$('.album-art'),heroEl=$('#musicHero');
@@ -2231,7 +2316,7 @@ $('#musicSort').onclick=()=>{const modes=['new','day','week','month','year'];mus
 document.addEventListener('change',e=>{if(e.target.matches('.hit-select')){const track=state.tracks.find(t=>t.id===e.target.dataset.track);if(track){track.hit=e.target.value;persist();renderMusic();}}});
 
 // Settings only expose actions that have a real local implementation.
-$('.preferences').innerHTML=`<div id="themePreferences"></div><div class="preference-row" id="accountPreference"></div><div class="preference-row"><div><strong>Утренний план</strong><span>Показывать напоминание при открытии после 08:00</span></div><button class="toggle" data-setting="morning" aria-label="Утренний план"><i></i></button></div><div class="preference-row"><div><strong>Звук выполнения</strong><span>Короткий сигнал при завершении задачи</span></div><button class="toggle" data-setting="sound" aria-label="Звук выполнения"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать колокольчик напоминаний</span></div><button class="toggle" data-setting="focus" aria-label="Фокус-режим"><i></i></button></div><div class="preference-row"><div><strong>Стеклянный интерфейс</strong><span>Размытие фона и полупрозрачные панели</span></div><button class="toggle" data-setting="glass" aria-label="Стеклянный интерфейс"><i></i></button></div><div id="securityPreferences"></div><div class="preference-row"><div><strong>Хранение данных</strong><span>${CLOUD_ENABLED?'Синхронизируется с облаком Supabase. Аудио и видео — в этом браузере.':'Автоматически в этом браузере. Аудио и видео — в IndexedDB.'}</span></div>${button('export','','Экспорт данных')}</div>`;
+$('.preferences').innerHTML=`<div id="themePreferences"></div><div class="preference-row" id="accountPreference"></div><div class="preference-row"><div><strong>Утренний план</strong><span>Показывать напоминание при открытии после 08:00</span></div><button class="toggle" data-setting="morning" aria-label="Утренний план"><i></i></button></div><div class="preference-row"><div><strong>Звук выполнения</strong><span>Короткий сигнал при завершении задачи</span></div><button class="toggle" data-setting="sound" aria-label="Звук выполнения"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать колокольчик напоминаний</span></div><button class="toggle" data-setting="focus" aria-label="Фокус-режим"><i></i></button></div><div class="preference-row"><div><strong>Стеклянный интерфейс</strong><span>Размытие фона и полупрозрачные панели</span></div><button class="toggle" data-setting="glass" aria-label="Стеклянный интерфейс"><i></i></button></div><div id="securityPreferences"></div><div class="preference-row"><div><strong>Хранение данных</strong><span>${CLOUD_ENABLED?'Данные и плейлисты синхронизируются с облаком Supabase. Аудио загружается в облачное хранилище, видео — в этом браузере.':'Автоматически в этом браузере. Аудио и видео — в IndexedDB.'}</span></div>${CLOUD_ENABLED?button('sync-media','','Синхронизировать аудио'):''}${button('export','','Экспорт данных')}</div>`;
 function renderThemePreferences(){
   const box=$('#themePreferences'); if(!box)return;
   const previewColor=themeAccentColor(state.accent,state.theme);
@@ -3164,12 +3249,13 @@ document.addEventListener('click',async e=>{
     if(action==='playlist-open'){selectedPlaylist=id;renderMusic();}
     if(action==='playlist-all'){selectedPlaylist='';renderMusic();}
     if(action==='playlist-edit')playlistEditor(id);
-    if(action==='playlist-delete'){const p=state.playlists.find(p=>p.id===id);if(p)confirmDelete(p.name,()=>{const tracks=state.tracks.filter(t=>t.playlist===id);if(tracks.some(t=>t.id===currentTrack))stopCurrentTrack();tracks.forEach(t=>audioStore('delete',t.id).catch(()=>toast('Не удалось очистить файл из хранилища.',true)));state.tracks=state.tracks.filter(t=>t.playlist!==id);state.playlists=state.playlists.filter(p=>p.id!==id);if(selectedPlaylist===id)selectedPlaylist='';logAction('удалил плейлист',`«${p.name}» · ${tracks.length} треков`,id);});}
+    if(action==='playlist-delete'){const p=state.playlists.find(p=>p.id===id);if(p)confirmDelete(p.name,()=>{const tracks=state.tracks.filter(t=>t.playlist===id);if(tracks.some(t=>t.id===currentTrack))stopCurrentTrack();tracks.forEach(t=>{audioStore('delete',t.id).catch(()=>toast('Не удалось очистить файл из хранилища.',true));deleteTrackMedia(t);});state.tracks=state.tracks.filter(t=>t.playlist!==id);state.playlists=state.playlists.filter(p=>p.id!==id);if(selectedPlaylist===id)selectedPlaylist='';logAction('удалил плейлист',`«${p.name}» · ${tracks.length} треков`,id);});}
     if(action==='track-add')addTrackDialog(id);
     if(action==='track-edit')editTrack(id);
     if(action==='track-play')await playTrack(id);
     if(action==='track-favorite'){const track=state.tracks.find(t=>t.id===id);if(track){track.favorite=!track.favorite;logAction(track.favorite?'добавил трек в любимые':'убрал трек из любимых',`«${track.title}»`,id);persist();renderMusic();renderProfile();toast(track.favorite?'Добавлено в любимые':'Убрано из любимых');}}
-    if(action==='track-delete'){const t=state.tracks.find(t=>t.id===id);if(t)confirmDelete(t.title,()=>{if(currentTrack===id)stopCurrentTrack();state.tracks=state.tracks.filter(t=>t.id!==id);audioStore('delete',id).catch(()=>toast('Не удалось очистить аудиофайл.',true));logAction('удалил трек',`«${t.title}»`,id);});}
+    if(action==='track-delete'){const t=state.tracks.find(t=>t.id===id);if(t)confirmDelete(t.title,()=>{if(currentTrack===id)stopCurrentTrack();state.tracks=state.tracks.filter(t=>t.id!==id);audioStore('delete',id).catch(()=>toast('Не удалось очистить аудиофайл.',true));deleteTrackMedia(t);logAction('удалил трек',`«${t.title}»`,id);});}
+    if(action==='sync-media'){syncMediaToCloud();}
     if(action==='export'){const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`sphere-${today()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);logAction('экспортировал данные','JSON-копия профиля');toast('Данные экспортированы. Аудио и видео в JSON не входят.');}
     if(action==='logout')logoutAccount();
     if(action==='change-password')changePasswordDialog();
