@@ -1482,3 +1482,23 @@ body.sidebar-open .sidebar-backdrop{display:none!important}
   .cabinet-color-grid{grid-template-columns:1fr}
   .cabinet-bg-swatch{width:40px;height:40px}
 }
+
+/* v59: журнал обновлений у логотипа */
+.brand-updates{position:relative;margin-left:auto;width:30px;height:30px;flex:none;display:grid;place-items:center;border:1px solid var(--line);border-radius:9px;background:transparent;color:var(--dim);transition:color .18s ease,border-color .18s ease,background .18s ease}
+.brand-updates:hover,.brand-updates:focus-visible{color:var(--text);border-color:color-mix(in srgb,var(--blue) 55%,var(--line));background:var(--panel2)}
+.brand-updates-dot{position:absolute;top:-3px;right:-3px;width:8px;height:8px;border-radius:50%;background:var(--accent-2,var(--blue));box-shadow:0 0 0 2px var(--sidebar)}
+.brand-updates-dot[hidden]{display:none!important}
+.updates-list{display:grid;gap:14px;max-height:min(58vh,520px);overflow:auto;padding-right:4px;margin:4px 0 6px}
+.updates-item{border-left:2px solid color-mix(in srgb,var(--blue) 55%,var(--line));padding:2px 0 2px 13px}
+.updates-head{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:6px}
+.updates-head b{font:700 12px Manrope,sans-serif;color:var(--text);letter-spacing:.02em}
+.updates-head span{font-size:10px;color:var(--muted)}
+.updates-item ul{margin:0;padding-left:16px;display:grid;gap:4px}
+.updates-item li{font-size:11.5px;line-height:1.5;color:var(--muted)}
+.updates-item.latest{border-left-color:var(--accent-2,var(--blue));background:color-mix(in srgb,var(--blue) 6%,transparent);border-radius:0 10px 10px 0;padding-right:10px}
+.updates-item.latest li{color:var(--text)}
+.updates-note{margin:0;font-size:10px;color:var(--dim)}
+@media(max-width:720px){
+  .brand-updates{width:32px;height:32px}
+  .updates-list{max-height:52vh}
+}
