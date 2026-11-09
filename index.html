@@ -60,7 +60,6 @@
       <div class="sidebar-label second">Личное</div>
       <nav class="main-nav">
         <button class="nav-item" data-view="goals"><span class="nav-icon">◎</span>Мои цели</button>
-        <button class="nav-item" data-view="payment"><span class="nav-icon">₽</span>Оплата</button>
         <button class="nav-item" data-view="profile"><span class="nav-icon">◉</span>Личный кабинет</button>
         <button class="nav-item" data-view="admin" id="adminNav" hidden><span class="nav-icon">⚑</span>Админ-панель <i class="admin-pulse" id="adminNavDot" title="Есть новые уведомления" hidden></i></button>
       </nav>
@@ -108,52 +107,6 @@
         <section class="view" id="view-news"><div class="page-header"><div><p class="eyebrow">ДЛЯ РАЗВИТИЯ</p><h1>Статьи</h1><p class="subheading">Идеи и знания, которые двигают тебя вперёд.</p></div></div><div id="newsWorkspace"><div class="news-actions"><label class="news-select-wrap"><span>Тема</span><select id="newsCategorySelect" aria-label="Фильтр новостей"></select></label><label class="news-select-wrap"><span>Источник</span><select id="newsSourceSelect" aria-label="Фильтр по источникам"></select></label><button class="secondary-btn" id="addNews">＋ Новость</button><button class="secondary-btn" id="addNewsSource">＋ Источник</button><button class="secondary-btn" id="manageSources">Мои источники</button></div><div class="news-layout"><div class="news-main"><div class="news-list" id="newsList"></div></div></div></div></section>
 
         <section class="view" id="view-goals"><div class="page-header"><div><p class="eyebrow">НАПРАВЛЕНИЕ</p><h1>Мои цели</h1><p class="subheading">Большие результаты складываются из маленьких шагов.</p></div><button class="primary-btn" id="addGoal">＋ Новая цель</button></div><div class="goals-grid"><article class="card goal-card goal-main"><div class="goal-top"><span class="goal-icon purple">⌁</span><span class="goal-period">До 31 декабря 2024</span></div><h2>Запустить свой проект</h2><p>Создать и выпустить продукт, которым буду гордиться.</p><div class="goal-progress"><div><span>Прогресс</span><b>68%</b></div><div class="progress-bar"><i style="width:68%"></i></div></div><div class="goal-footer"><span>8 из 12 шагов</span><button class="text-btn">Открыть цель →</button></div></article><article class="card goal-card"><div class="goal-top"><span class="goal-icon blue">⌁</span><span class="goal-period">До 1 ноября</span></div><h2>Пробежать 100 км</h2><p>Здоровье и энергия — моя главная инвестиция.</p><div class="goal-progress"><div><span>Прогресс</span><b>42%</b></div><div class="progress-bar blue-bar"><i style="width:42%"></i></div></div><div class="goal-footer"><span>42 из 100 км</span><button class="text-btn">Открыть →</button></div></article><article class="card goal-card"><div class="goal-top"><span class="goal-icon orange">✦</span><span class="goal-period">На этот месяц</span></div><h2>Прочитать 3 книги</h2><p>Расширять кругозор и находить новые смыслы.</p><div class="goal-progress"><div><span>Прогресс</span><b>33%</b></div><div class="progress-bar orange-bar"><i style="width:33%"></i></div></div><div class="goal-footer"><span>1 из 3 книг</span><button class="text-btn">Открыть →</button></div></article></div></section>
-
-        <section class="view" id="view-payment">
-          <div class="page-header"><div><p class="eyebrow">ПОДДЕРЖКА ПРОЕКТА</p><h1>Оплата</h1><p class="subheading">Разовый платёж 10 ₽ через Систему быстрых платежей на Сбербанк.</p></div><span class="status-chip" id="paymentModeChip">● демо-режим</span></div>
-          <div class="payment-layout">
-            <article class="card payment-card">
-              <div class="payment-sum">
-                <div><p class="eyebrow">К ОПЛАТЕ</p><strong class="payment-amount">10 <span>₽</span></strong><p class="payment-sum-note">Один платёж · без подписки</p></div>
-                <div class="payment-method"><span class="payment-method-logo">СБП</span><div><strong>СБП</strong><small>Сбербанк</small></div></div>
-              </div>
-              <div class="payment-qr-wrap">
-                <div class="payment-qr" id="paymentQr" aria-label="QR-код для оплаты"></div>
-                <div class="payment-qr-copy">
-                  <strong>Отсканируйте QR в приложении банка</strong>
-                  <p class="help-text">Откройте Сбербанк Онлайн → «Оплата по QR» → наведите камеру на код. Подойдёт и приложение любого банка с СБП.</p>
-                  <div class="payment-qr-actions">
-                    <button class="secondary-btn" id="paymentOpenLink" type="button">Открыть ссылку СБП</button>
-                    <button class="text-btn" id="paymentCopyLink" type="button">Скопировать ссылку</button>
-                  </div>
-                </div>
-              </div>
-              <form class="payment-form" id="paymentForm">
-                <label>Email для чека<input id="paymentEmail" type="email" required placeholder="you@example.com" autocomplete="email" /></label>
-                <label class="payment-consent"><input id="paymentConsent" type="checkbox" required /><span>Согласен с условиями оплаты и обработкой персональных данных</span></label>
-                <button class="primary-btn payment-submit" id="paymentSubmit" type="submit">Оплатить 10 ₽</button>
-                <p class="payment-note" id="paymentNote" role="status"></p>
-              </form>
-            </article>
-            <aside class="payment-side">
-              <article class="card payment-steps">
-                <p class="eyebrow">КАК ЭТО РАБОТАЕТ</p>
-                <ol>
-                  <li><b>1</b><div><strong>Откройте QR-код</strong><span>Отсканируйте его в Сбербанк Онлайн или нажмите «Открыть ссылку СБП».</span></div></li>
-                  <li><b>2</b><div><strong>Подтвердите платёж</strong><span>Проверьте сумму 10 ₽ и получателя, затем подтвердите перевод.</span></div></li>
-                  <li><b>3</b><div><strong>Готово</strong><span>Вернитесь сюда — оплата засчитается после подтверждения банком.</span></div></li>
-                </ol>
-                <p class="payment-note">Платёж разовый. Никаких списаний по подписке.</p>
-              </article>
-              <article class="card payment-help">
-                <p class="eyebrow">НУЖНА ПОМОЩЬ</p>
-                <p class="help-text">Если платёж не прошёл или деньги списались дважды — напишите в поддержку, разберёмся вручную.</p>
-                <button class="secondary-btn" type="button" id="paymentSupport">✉ Написать в поддержку</button>
-              </article>
-            </aside>
-          </div>
-        </section>
-
         <section class="view" id="view-profile"><div class="page-header"><div><p class="eyebrow">ТВОЁ ПРОСТРАНСТВО</p><h1>Личный кабинет</h1><p class="subheading">Настрой сферу под свой ритм.</p></div></div><div class="profile-layout"><article class="card profile-card" id="profileCard"><div class="profile-cover" id="profileCover"><video id="profileVideo" muted loop autoplay playsinline></video></div><div class="profile-body"><div class="profile-avatar">АИ</div><div class="profile-identity"><h2 id="profileName">Алексей Иванов</h2><div class="profile-tools"><button class="icon-btn profile-layout-btn" type="button" data-profile-tool="layout" title="Показать компактный вид">☰</button><button class="icon-btn gear-btn" type="button" data-profile-tool="edit" aria-label="Изменить профиль" title="Изменить профиль"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.1"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 8.97 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3v-4h.08A1.7 1.7 0 0 0 4.6 8.97a1.7 1.7 0 0 0-.34-1.88L4.2 7.03 7.03 4.2l.06.06A1.7 1.7 0 0 0 8.97 4.6 1.7 1.7 0 0 0 10 3.04V3h4v.08a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 8.97 1.7 1.7 0 0 0 20.96 10H21v4h-.08A1.7 1.7 0 0 0 19.4 15Z"></path></svg></button></div><span class="profile-owner" id="profileOwner">✦ В своём ритме</span></div><p id="profileAliasLine">@alexey.ivanov</p><div class="profile-stats"><div><b>24</b><span>дня сессии</span></div><div><b>86</b><span>задач закрыто</span></div><div><b>12</b><span>целей в году</span></div></div><div class="profile-hub-tabs" role="tablist" aria-label="Music, Art, Gallery"><button type="button" class="profile-hub-tab active" data-profile-section="tracks" role="tab" aria-selected="true"><span class="profile-hub-ico">♥</span><span class="profile-hub-label">Music</span><b id="favoriteTrackCount">0</b></button><button type="button" class="profile-hub-tab" data-profile-section="articles" role="tab" aria-selected="false"><span class="profile-hub-ico">▤</span><span class="profile-hub-label">Art</span><b id="favoriteArticleCount">0</b></button><button type="button" class="profile-hub-tab" data-profile-section="gallery" role="tab" aria-selected="false"><span class="profile-hub-ico">▧</span><span class="profile-hub-label">Gallery</span><b id="galleryCount">0</b></button></div></article><article class="card settings-card"><div class="card-heading"><div><p class="eyebrow">ТВОЯ СТАТИСТИКА</p><h3>Ритм недели</h3></div><span class="status-chip">Эта неделя</span></div><div class="chart"><div class="chart-bars"><i style="height:42%"></i><i style="height:67%"></i><i style="height:52%"></i><i style="height:88%"></i><i style="height:71%"></i><i style="height:94%"></i><i style="height:58%"></i></div><div class="chart-labels"><span>ПН</span><span>ВТ</span><span>СР</span><span>ЧТ</span><span>ПТ</span><span>СБ</span><span>ВС</span></div></div><div class="stat-callout"><span>✦</span><div><strong>Отличная динамика!</strong><small>Ты продуктивнее на 18%, чем на прошлой неделе.</small></div></div></article><article class="card profile-hub-card"><div class="profile-hub"><div class="profile-hub-panel" id="profileHubPanel" role="tabpanel"></div></div></article></div></section>
 
         <section class="view" id="view-settings"><div class="page-header"><div><p class="eyebrow">ПОД ТЕБЯ</p><h1>Настройки</h1><p class="subheading">Управляй своим цифровым пространством.</p></div></div><div class="card preferences"><div class="preference-row"><div><strong>Утреннее напоминание</strong><span>Получать план дня в 08:00</span></div><button class="toggle on"><i></i></button></div><div class="preference-row"><div><strong>Звуки интерфейса</strong><span>Мягкие сигналы при выполнении задач</span></div><button class="toggle on"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать отвлекающие уведомления</span></div><button class="toggle"><i></i></button></div><div class="preference-row"><div><strong>Синхронизация</strong><span>Автоматически сохранять изменения</span></div><button class="toggle on"><i></i></button></div></div></section>
