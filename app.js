@@ -446,6 +446,79 @@ function showView(view) {
   if (view === 'admin') { markAdminSeen(); renderAdmin(); }
   updateAdminAlert();
 }
+const SITE_UPDATES = [
+  {version:'v59', date:'9 ноября 2026', items:[
+    'Рядом с логотипом появилась история обновлений сайта',
+    'Журнал показывает версию, дату и список изменений'
+  ]},
+  {version:'v58', date:'9 ноября 2026', items:[
+    'Фон страницы перенесён в Настройки: 4 цвета, прозрачность, фото или видео',
+    'Старые настройки темы убраны',
+    'Сайт запоминает раздел и открывает его после обновления страницы',
+    'Иконки мини-плеера увеличены до 20px',
+    'Плейлисты — горизонтальная лента с прокруткой',
+    'Убрана кнопка «Сначала новые» в музыке'
+  ]},
+  {version:'v57', date:'9 ноября 2026', items:[
+    'Исправлено мобильное меню: затемнение больше не перекрывает кнопки',
+    'Меню закрывается тапом мимо и по Esc'
+  ]},
+  {version:'v56', date:'9 ноября 2026', items:[
+    'Синхронизация аудио между устройствами через облако',
+    'Кнопка «Синхронизировать аудио» в настройках',
+    'Если файла нет на телефоне — его можно привязать вручную'
+  ]},
+  {version:'v55', date:'6 ноября 2026', items:[
+    'Вертикальный ползунок громкости в шапке плейлиста',
+    'На телефонах ползунок становится горизонтальным'
+  ]},
+  {version:'v54', date:'6 ноября 2026', items:[
+    'Полный адаптив для телефонов, планшетов и широких мониторов',
+    'Безопасные отступы под вырезы экрана (safe-area)',
+    'Удобные зоны нажатия на сенсорных экранах'
+  ]},
+  {version:'v52', date:'6 ноября 2026', items:[
+    'Удалён большой плеер в разделе «Музыка»',
+    'Вкладки «треки / статьи / галерея» перенесены под статистику профиля'
+  ]},
+  {version:'v51', date:'6 ноября 2026', items:[
+    'Страница плейлиста с обложкой и выбором обложки',
+    'Двухстрочные треки: название, длительность, лайк — артист и действия',
+    'Длительность треков сохраняется и суммируется по плейлисту'
+  ]},
+  {version:'v50', date:'6 ноября 2026', items:[
+    'Плейлист запускается нажатием на карточку',
+    'Перемешка и зацикливание трека в мини-плеере, перемотка',
+    'Плейлисты в 4 колонки, «+» вместо «+ Трек»',
+    'Третий блок в профиле на всю ширину, отступ у текста задач'
+  ]},
+  {version:'v49', date:'6 ноября 2026', items:[
+    'Настройка прозрачности градиента фона',
+    'Стеклянный интерфейс (glassmorphism)',
+    'Удалён раздел «АУДИТ», SVG-скрепка, отступ у действий новостей'
+  ]},
+  {version:'v36–v48', date:'до 6 ноября 2026', items:[
+    'Музыкальный раздел, мини-плеер, темы оформления',
+    'Админ-панель, защита исходного кода, статьи и галерея'
+  ]}
+];
+const UPDATES_SEEN_KEY = 'sphere-updates-seen';
+function openSiteUpdates(){
+  const html = `<div class="updates-list">${SITE_UPDATES.map((entry,index)=>`<article class="updates-item ${index===0?'latest':''}"><div class="updates-head"><b>${escapeHtml(entry.version)}</b><span>${escapeHtml(entry.date)}</span></div><ul>${entry.items.map(item=>`<li>${escapeHtml(item)}</li>`).join('')}</ul></article>`).join('')}</div><p class="updates-note">Журнал пополняется с каждой публикацией сайта.</p>`;
+  openEditor('Обновления сайта', html, null);
+}
+$('#updatesBtn')?.addEventListener('click',()=>{
+  openSiteUpdates();
+  try{localStorage.setItem(UPDATES_SEEN_KEY,SITE_UPDATES[0].version);}catch{}
+  const dot=$('#updatesDot'); if(dot)dot.hidden=true;
+});
+(() => {
+  try{
+    const dot=$('#updatesDot');
+    if(dot)dot.hidden=localStorage.getItem(UPDATES_SEEN_KEY)===SITE_UPDATES[0].version;
+  }catch{}
+})();
+
 $$('.nav-item[data-view]').forEach(el => el.onclick = () => showView(el.dataset.view));
 $$('[data-view-target]').forEach(el => el.onclick = () => showView(el.dataset.viewTarget));
 function setSidebarOpen(open){
