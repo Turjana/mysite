@@ -1435,3 +1435,10 @@ html{text-size-adjust:100%;-webkit-text-size-adjust:100%}
   .playlist-volume-value{min-width:34px;text-align:right}
   .playlist-volume-mute{width:32px;height:32px;flex:none}
 }
+
+/* v57: без затемняющего слоя — он перекрывал меню (app-shell создаёт свой stacking context) */
+.sidebar-backdrop{display:none!important}
+body.sidebar-open .sidebar-backdrop{display:none!important}
+@media(max-width:720px){
+  .sidebar{z-index:80}
+}
