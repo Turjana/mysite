@@ -361,6 +361,9 @@ let selectedDate = today(), calendarMonth = new Date().getMonth(), calendarYear 
 let taskFilter = 'all', taskSort = 'manual', musicSort = 'new', selectedPlaylist = '', currentTrack = '';
 let draggedTaskId = '';
 let activeView = 'overview', clockDate = today();
+const ACTIVE_VIEW_KEY = 'sphere-active-view';
+function rememberView(view){try{localStorage.setItem(ACTIVE_VIEW_KEY,view);}catch{}}
+function savedView(){try{const view=localStorage.getItem(ACTIVE_VIEW_KEY);return view&&document.getElementById('view-'+view)?view:'overview';}catch{return 'overview';}}
 let newsFilter = 'Все', newsSource = 'Все';
 const statuses = {0:'Не начато',50:'Наполовину',100:'Выполнено'};
 const hits = {'':'Без метки',day:'Хит дня',week:'Хит недели',month:'Хит месяца',year:'Хит года'};
@@ -434,6 +437,7 @@ function showView(view) {
   if (view === 'admin' && !isOwner(currentAccount)) view = 'overview';
   if (activeView === 'admin' && view !== 'admin') markAdminSeen();
   activeView = view;
+  rememberView(view);
   if (view !== 'profile') hideProfilePhotoViewer();
   applyCabinetBackground();
   $$('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`));
@@ -1116,8 +1120,6 @@ function renderProfile() {
   const prefix=$('#profileOwner');
   if(prefix){prefix.hidden=!owner;prefix.textContent=state.profile.status||'✦ В своём ритме';}
   if(!state.profile.photo&&$('#profilePhotoViewer')?.dataset.mode==='photo')hideProfilePhotoViewer();
-  const cabinetBtn=$('#profileCabinetBgBtn');
-  if(cabinetBtn){cabinetBtn.hidden=!owner;cabinetBtn.classList.toggle('has-bg',!!(cabinetBackgroundValue()||cabinetVideoValue()||cabinetShaderValue()));}
   applyCabinetBackground();
   $('#profileAliasLine').textContent=`@${state.profile.alias||'без_псевдонима'}`;
   $$('.profile-status').forEach(el=>el.remove());
@@ -1623,7 +1625,6 @@ function editCabinetBackground(){
   initShaderBgEditor();
 }
 $$('[data-profile-tool="edit"]').forEach(b=>b.onclick=editProfile);
-$('#profileCabinetBgBtn')?.addEventListener('click',editCabinetBackground);
 $$('[data-profile-tool="layout"]').forEach(b=>b.onclick=()=>{
   const next=state.profile.layout==='row'?'card':'row';
   const toggle=()=>{state.profile.layout=next;persist();renderProfile();};
@@ -2312,22 +2313,103 @@ $('#playerLoop')?.addEventListener('click',()=>setMusicLoop(!musicLoop));
 syncMusicToggles();
 $('#miniPlayerClose')?.addEventListener('click',()=>stopCurrentTrack());
 $('#miniPlayerCover')?.addEventListener('click',()=>{showView('music');});
-$('#musicSort').onclick=()=>{const modes=['new','day','week','month','year'];musicSort=modes[(modes.indexOf(musicSort)+1)%modes.length];$('#musicSort').textContent=musicSort==='new'?'Все · сначала новые':hits[musicSort];renderMusic();};
 document.addEventListener('change',e=>{if(e.target.matches('.hit-select')){const track=state.tracks.find(t=>t.id===e.target.dataset.track);if(track){track.hit=e.target.value;persist();renderMusic();}}});
 
 // Settings only expose actions that have a real local implementation.
 $('.preferences').innerHTML=`<div id="themePreferences"></div><div class="preference-row" id="accountPreference"></div><div class="preference-row"><div><strong>Утренний план</strong><span>Показывать напоминание при открытии после 08:00</span></div><button class="toggle" data-setting="morning" aria-label="Утренний план"><i></i></button></div><div class="preference-row"><div><strong>Звук выполнения</strong><span>Короткий сигнал при завершении задачи</span></div><button class="toggle" data-setting="sound" aria-label="Звук выполнения"><i></i></button></div><div class="preference-row"><div><strong>Фокус-режим</strong><span>Скрывать колокольчик напоминаний</span></div><button class="toggle" data-setting="focus" aria-label="Фокус-режим"><i></i></button></div><div class="preference-row"><div><strong>Стеклянный интерфейс</strong><span>Размытие фона и полупрозрачные панели</span></div><button class="toggle" data-setting="glass" aria-label="Стеклянный интерфейс"><i></i></button></div><div id="securityPreferences"></div><div class="preference-row"><div><strong>Хранение данных</strong><span>${CLOUD_ENABLED?'Данные и плейлисты синхронизируются с облаком Supabase. Аудио загружается в облачное хранилище, видео — в этом браузере.':'Автоматически в этом браузере. Аудио и видео — в IndexedDB.'}</span></div>${CLOUD_ENABLED?button('sync-media','','Синхронизировать аудио'):''}${button('export','','Экспорт данных')}</div>`;
+let bgPrefsTimer=0;
+function scheduleBgPrefsSave(){clearTimeout(bgPrefsTimer);bgPrefsTimer=setTimeout(()=>{persist();},400);}
+function cabinetPreviewVars(colors){return `--c1:${colors.colorA};--c2:${colors.colorB};--c3:${colors.colorC};--c4:${colors.colorD}`;}
 function renderThemePreferences(){
   const box=$('#themePreferences'); if(!box)return;
-  const previewColor=themeAccentColor(state.accent,state.theme);
-  box.innerHTML=`<div class="theme-preferences"><div class="theme-pref-head"><div><strong>Оформление</strong><span>Тема и цвет акцента · фон плавно переливается</span></div><span class="theme-preview-dot" style="--preview:${previewColor}"></span></div><div class="theme-pref-grid single"><label class="theme-field">Тема<select id="themeSelect">${Object.entries(THEME_LABELS).map(([key,label])=>`<option value="${key}" ${state.theme===key?'selected':''}>${label}</option>`).join('')}</select></label></div><div class="theme-swatches" role="radiogroup" aria-label="Цвет акцента">${Object.entries(THEME_PRESETS).map(([key,item])=>`<span class="theme-swatch-wrap"><button type="button" class="theme-swatch ${state.accent===key?'active':''}" data-accent="${key}" style="--swatch:${themeAccentColor(key,state.theme)}" title="${escapeHtml(themeAccentLabel(key,state.theme))}" aria-label="${escapeHtml(themeAccentLabel(key,state.theme))}" aria-pressed="${state.accent===key}"></button><span class="theme-swatch-name">${escapeHtml(themeAccentLabel(key,state.theme))}</span></span>`).join('')}</div></div>`;
-  $('#themeSelect').onchange=e=>{
-    state.theme=e.target.value==='light'?'light':'black';
-    applyTheme();persist();renderThemePreferences();
+  if(!isOwner(currentAccount)){box.innerHTML='';return;}
+  const colors=cabinetShaderValue()||CABINET_SHADER_DEFAULTS;
+  const opacity=cabinetShaderOpacity();
+  const labels={colorA:'Цвет A',colorB:'Цвет B',colorC:'Цвет C',colorD:'Цвет D'};
+  const cells=Object.keys(CABINET_SHADER_DEFAULTS).map(key=>`<div class="shader-color-cell" data-color-cell="${key}"><span>${labels[key]}</span><input type="color" data-bg-color="${key}" value="${colors[key]}" aria-label="${labels[key]}"><input type="text" data-bg-hex="${key}" value="${colors[key]}" maxlength="7" spellcheck="false" aria-label="${labels[key]} HEX"></div>`).join('');
+  const hasBg=!!(cabinetBackgroundValue()||cabinetVideoValue()||state.profile.cabinetBgShader);
+  box.innerHTML=`<div class="theme-preferences cabinet-preferences">
+    <div class="theme-pref-head"><div><strong>Фон страницы</strong><span>Живой градиент из четырёх цветов · фото или видео</span></div><span class="cabinet-bg-swatch" id="cabinetBgSwatch" style="${cabinetPreviewVars(colors)}"></span></div>
+    <div class="shader-color-grid cabinet-color-grid">${cells}</div>
+    <div class="shader-opacity-row"><label for="cabinetOpacity">Прозрачность</label><input type="range" id="cabinetOpacity" min="0" max="100" step="1" value="${opacity}"><output id="cabinetOpacityOut">${opacity}%</output></div>
+    <div class="cabinet-settings-actions">
+      <label class="cabinet-bg-upload secondary-btn">Фото или видео<input type="file" id="cabinetBgFile" accept="image/*,video/*" hidden></label>
+      ${hasBg?'<button type="button" class="secondary-btn" id="cabinetBgRemove">Убрать фон</button>':''}
+    </div>
+    <p class="help-text">Градиент виден во всех разделах, фото и видео — в профиле. Изменения применяются и сохраняются сразу.</p>
+  </div>`;
+  const readColors=()=>{
+    const next={};
+    for(const key of Object.keys(CABINET_SHADER_DEFAULTS)){
+      const text=$(`[data-bg-hex="${key}"]`,box);
+      const hex=normalizeHexColor(text?.value);
+      const cell=text?.closest('.shader-color-cell');
+      if(!hex){cell?.classList.add('invalid');continue;}
+      cell?.classList.remove('invalid');
+      next[key]=hex;
+    }
+    return Object.keys(next).length===4?next:null;
   };
-  $$('.theme-swatch',box).forEach(swatch=>swatch.onclick=()=>{
-    state.accent=THEME_PRESETS[swatch.dataset.accent]?swatch.dataset.accent:'blue';
-    applyTheme();persist();renderThemePreferences();
+  const paintSwatch=colorsNow=>{
+    const swatch=$('#cabinetBgSwatch',box);
+    if(!swatch)return;
+    swatch.style.setProperty('--c1',colorsNow.colorA);
+    swatch.style.setProperty('--c2',colorsNow.colorB);
+    swatch.style.setProperty('--c3',colorsNow.colorC);
+    swatch.style.setProperty('--c4',colorsNow.colorD);
+  };
+  const applyColors=()=>{
+    const next=readColors(); if(!next)return;
+    const op=Math.min(100,Math.max(0,Math.round(+$('#cabinetOpacity',box).value||0)));
+    delete state.profile.cabinetBg; delete state.profile.cabinetBgVideo;
+    state.profile.cabinetBgShader={...next,opacity:op};
+    paintSwatch(next);
+    applyCabinetBackground();
+    scheduleBgPrefsSave();
+  };
+  for(const key of Object.keys(CABINET_SHADER_DEFAULTS)){
+    const pick=$(`[data-bg-color="${key}"]`,box), text=$(`[data-bg-hex="${key}"]`,box);
+    pick?.addEventListener('input',()=>{if(text)text.value=pick.value;applyColors();});
+    text?.addEventListener('input',()=>{
+      const hex=normalizeHexColor(text.value);
+      if(hex){pick.value=hex;applyColors();}
+      else text.closest('.shader-color-cell')?.classList.add('invalid');
+    });
+  }
+  const range=$('#cabinetOpacity',box), out=$('#cabinetOpacityOut',box);
+  range?.addEventListener('input',()=>{
+    const value=Math.min(100,Math.max(0,Math.round(+range.value||0)));
+    if(out)out.textContent=value+'%';
+    const next=readColors()||colors;
+    state.profile.cabinetBgShader={...next,opacity:value};
+    applyCabinetBackground();
+    scheduleBgPrefsSave();
+  });
+  const fileInput=$('#cabinetBgFile',box);
+  fileInput?.addEventListener('change',async()=>{
+    const file=fileInput.files?.[0]; if(!file)return;
+    try{
+      if(file.type.startsWith('image/')){
+        const image=await imageData(file,1920,.84);
+        if(state.profile.cabinetBgVideo)audioStore('delete',state.profile.cabinetBgVideo).catch(()=>{});
+        delete state.profile.cabinetBgVideo; delete state.profile.cabinetBgShader;
+        state.profile.cabinetBg=image;
+      }else if(file.type.startsWith('video/')){
+        const info=await videoData(file);
+        if(state.profile.cabinetBgVideo&&state.profile.cabinetBgVideo!==info.key)audioStore('delete',state.profile.cabinetBgVideo).catch(()=>{});
+        delete state.profile.cabinetBg; delete state.profile.cabinetBgShader;
+        state.profile.cabinetBgVideo=info.key;
+      }else throw new Error('Выберите фото или видео.');
+      persist();applyCabinetBackground();renderThemePreferences();
+      toast('Фон сохранён');
+    }catch(error){toast(error.message||'Не удалось сохранить фон.',true);}
+    fileInput.value='';
+  });
+  $('#cabinetBgRemove',box)?.addEventListener('click',()=>{
+    if(state.profile.cabinetBgVideo)audioStore('delete',state.profile.cabinetBgVideo).catch(()=>{});
+    delete state.profile.cabinetBg; delete state.profile.cabinetBgVideo; delete state.profile.cabinetBgShader;
+    persist();applyCabinetBackground();renderThemePreferences();
+    toast('Фон убран');
   });
 }
 function renderSettings(){
@@ -3367,7 +3449,7 @@ function showAuth(tab = 'login') {
 function applyStateAfterLogin() {
   selectedDate=today();calendarMonth=new Date().getMonth();calendarYear=new Date().getFullYear();
   taskFilter='all';taskSort='manual';selectedPlaylist='';currentTrack='';newsFilter='Все';
-  applyVolumeFromState();applyTheme();showView('overview');renderAll();updateClock();
+  applyVolumeFromState();applyTheme();showView(savedView());renderAll();updateClock();
   if(state.settings.morning&&new Date().getHours()>=8&&state.lastMorning!==today()){
     state.lastMorning=today();persist();toast(`Твой план на сегодня: ${state.tasks.filter(t=>t.date===today()&&t.progress<100).length} незавершённых задач.`);
   }
