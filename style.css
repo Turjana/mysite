@@ -1395,7 +1395,8 @@ html{text-size-adjust:100%;-webkit-text-size-adjust:100%}
 .sidebar-backdrop{display:none}
 @media(max-width:720px){
   body.sidebar-open{overflow:hidden}
-  .sidebar-backdrop{display:block;position:fixed;inset:0;z-index:4;background:rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity .25s ease;-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
+  .sidebar-backdrop{display:block;position:fixed;inset:0;z-index:3;background:rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity .25s ease}
+  .sidebar{z-index:60;box-shadow:0 0 60px #000c}
   body.sidebar-open .sidebar-backdrop{opacity:1;pointer-events:auto}
   .sidebar{padding-bottom:max(20px,env(safe-area-inset-bottom))}
   .toast{bottom:calc(12px + env(safe-area-inset-bottom,0px))}
