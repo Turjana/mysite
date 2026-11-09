@@ -444,16 +444,16 @@ function showView(view) {
 }
 $$('.nav-item[data-view]').forEach(el => el.onclick = () => showView(el.dataset.view));
 $$('[data-view-target]').forEach(el => el.onclick = () => showView(el.dataset.viewTarget));
-const sidebarBackdrop = document.createElement('div');
-sidebarBackdrop.className = 'sidebar-backdrop';
-sidebarBackdrop.setAttribute('aria-hidden', 'true');
-document.body.append(sidebarBackdrop);
 function setSidebarOpen(open){
   $('#sidebar').classList.toggle('open', open);
   document.body.classList.toggle('sidebar-open', open);
 }
 $('#menuBtn').onclick = () => setSidebarOpen(!$('#sidebar').classList.contains('open'));
-sidebarBackdrop.addEventListener('click', () => setSidebarOpen(false));
+document.addEventListener('click', e => {
+  if(!$('#sidebar').classList.contains('open'))return;
+  if(e.target.closest('#sidebar')||e.target.closest('#menuBtn'))return;
+  setSidebarOpen(false);
+});
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#sidebar').classList.contains('open')) setSidebarOpen(false); });
 $('.user-mini').setAttribute('role','button'); $('.user-mini').tabIndex = 0;
 $('.user-mini').onclick = e => { if (!e.target.closest('.more')) showView('profile'); };
