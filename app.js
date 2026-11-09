@@ -22,21 +22,6 @@ const ACCOUNT_PREFIX = 'sphere-state:';
 const SUPABASE_URL = 'https://kfowalcxzrtzpucxeqon.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtmb3dhbGN4enJ0enB1Y3hlcW9uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMyOTg2NzksImV4cCI6MjEwODg3NDY3OX0.rl8DxiWv4e6vlpOIOQknqj9yKTVniWXp8pZ1WFwfOlU';
 const CLOUD_ENABLED = /^https:\/\/.+\.supabase\.co$/i.test(SUPABASE_URL) && SUPABASE_ANON_KEY.length > 40;
-// --- Оплата через СБП -----------------------------------------------------
-// Чтобы принимать настоящие платежи, вставьте ссылку СБП (её выдаёт банк или
-// платёжный провайдер, например ЮKassa / CloudPayments / Т-Банк) и переключите
-// mode на 'live'. В демо-режиме деньги не списываются.
-const PAYMENT_CONFIG = {
-  amount: 10,
-  currency: '₽',
-  method: 'СБП',
-  bank: 'Сбербанк',
-  merchantName: 'Сфера',
-  mode: 'demo',        // 'demo' | 'live'
-  sbpLink: '',         // например https://qr.nspk.ru/...
-  qrImage: '',         // прямая ссылка на картинку QR (если даёт провайдер)
-  checkoutUrl: ''      // необязательно: страница оплаты провайдера
-};
 const priorityLabels = {urgent:'Срочный',medium:'Средний',low:'Не срочный'};
 const priorityRank = {urgent:0,medium:1,low:2};
 const normalizePriority = value => ({blue:'low',orange:'medium',purple:'urgent'}[value] || (priorityLabels[value] ? value : 'medium'));
@@ -472,11 +457,6 @@ const SITE_UPDATES = [
     'Стрелки мини-плеера заменены на SVG-иконки',
     'Обложка в мини-плеере заполняет блок без фона',
     'Пробел ставит трек на паузу и возобновляет воспроизведение'
-  ]},
-  {version:'v61', date:'9 ноября 2026', items:[
-    'Новый раздел «Оплата»: платёж 10 ₽ через СБП на Сбербанк',
-    'QR-код, кнопка открытия ссылки СБП и копирование ссылки',
-    'Демо-режим формы до подключения реального приёма платежей'
   ]},
   {version:'v60', items:[
     'Журнал обновлений без дат',
@@ -2610,51 +2590,6 @@ function updateSettingsCity(){ const el=$('#settingsWeatherCity'); if(el)el.text
 $$('[data-setting]').forEach(el=>el.onclick=()=>{state.settings[el.dataset.setting]=!state.settings[el.dataset.setting];logAction('изменил настройки',`${el.getAttribute('aria-label')}: ${state.settings[el.dataset.setting]?'вкл':'выкл'}`);persist();renderSettings();if(el.dataset.setting==='glass')applyTheme();});
 function completionSound(){if(!state.settings.sound)return;try{const ctx=new (window.AudioContext||window.webkitAudioContext)(),osc=ctx.createOscillator(),gain=ctx.createGain();osc.connect(gain);gain.connect(ctx.destination);osc.frequency.value=660;gain.gain.setValueAtTime(.07,ctx.currentTime);gain.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+.2);osc.start();osc.stop(ctx.currentTime+.22);osc.onended=()=>ctx.close();}catch{}}
 
-// --- Оплата через СБП -----------------------------------------------------
-const PAYMENT_QR_PLACEHOLDER='<div class="payment-qr-empty"><span>▦</span><small>QR-код появится после подключения оплаты</small></div>';
-function paymentLink(){return String(PAYMENT_CONFIG.sbpLink||'').trim();}
-function paymentIsLive(){return PAYMENT_CONFIG.mode==='live'&&!!(paymentLink()||PAYMENT_CONFIG.qrImage||PAYMENT_CONFIG.checkoutUrl);}
-function renderPayment(){
-  const chip=$('#paymentModeChip');
-  if(chip){const live=paymentIsLive();chip.textContent=live?'● подключено':'● демо-режим';chip.classList.toggle('ready',live);}
-  const qr=$('#paymentQr');
-  if(qr){
-    const image=PAYMENT_CONFIG.qrImage||(paymentLink()?`https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${encodeURIComponent(paymentLink())}`:'');
-    qr.innerHTML=image?`<img src="${escapeHtml(image)}" alt="QR-код для оплаты через СБП" />`:PAYMENT_QR_PLACEHOLDER;
-  }
-  const open=$('#paymentOpenLink'); if(open)open.disabled=!paymentLink()&&!PAYMENT_CONFIG.checkoutUrl;
-  const copy=$('#paymentCopyLink'); if(copy)copy.hidden=!paymentLink();
-  const note=$('#paymentNote'); if(note)note.textContent=paymentIsLive()?'':'Форма работает в демо-режиме: настоящий платёж не создаётся. Укажите ссылку СБП в PAYMENT_CONFIG.';
-}
-function paymentTarget(){return String(PAYMENT_CONFIG.checkoutUrl||paymentLink()||'').trim();}
-function openPaymentTarget(){
-  const url=paymentTarget();
-  if(!url){toast('Оплата ещё не подключена: добавьте ссылку СБП в PAYMENT_CONFIG.',true);return false;}
-  window.open(url,'_blank','noopener');
-  return true;
-}
-$('#paymentOpenLink')?.addEventListener('click',openPaymentTarget);
-$('#paymentCopyLink')?.addEventListener('click',async()=>{
-  const url=paymentLink(); if(!url)return;
-  try{await navigator.clipboard.writeText(url);toast('Ссылка на оплату скопирована');}
-  catch{toast('Не удалось скопировать ссылку',true);}
-});
-$('#paymentSupport')?.addEventListener('click',openSupportDialog);
-$('#paymentForm')?.addEventListener('submit',event=>{
-  event.preventDefault();
-  const email=String($('#paymentEmail')?.value||'').trim();
-  const consent=$('#paymentConsent');
-  const note=$('#paymentNote');
-  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){if(note)note.textContent='Укажите корректный email для чека.';return;}
-  if(consent&&!consent.checked){if(note)note.textContent='Подтвердите согласие с условиями оплаты.';return;}
-  if(!paymentIsLive()){
-    if(note)note.textContent='Это демо-режим. Чтобы принимать реальные платежи, подключите СБП — инструкция в файле «ОПЛАТА-СБП.md».';
-    toast('Демо-режим: реальный платёж не создан');
-    return;
-  }
-  if(openPaymentTarget()&&note)note.textContent='Открыли страницу оплаты. После подтверждения банком вернитесь сюда.';
-});
-
 // --- Owner-only admin database -------------------------------------------
 let adminSearch='',adminUsers=[],adminEvents=[],adminLoadedAt=0,adminRefreshSeq=0,adminRenderSignature='';
 let adminProfileData=null,adminProfilePhoto='';
@@ -3594,7 +3529,7 @@ document.addEventListener('keydown',e=>{
   e.preventDefault();
   selectedPlaylist=card.dataset.playlist;renderMusic();
 });
-function renderAll(){renderTasks();renderCalendar();renderGoals();renderProfile();renderHabits();renderMusic();renderNews();renderSettings();renderPayment();updateSettingsCity();updateAdminAccess();if(activeView==='admin')renderAdmin();}
+function renderAll(){renderTasks();renderCalendar();renderGoals();renderProfile();renderHabits();renderMusic();renderNews();renderSettings();updateSettingsCity();updateAdminAccess();if(activeView==='admin')renderAdmin();}
 function saveAndRender(){persist();renderAll();}
 
 const accountKey = account => ACCOUNT_PREFIX + account.id;
