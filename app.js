@@ -449,6 +449,10 @@ function showView(view) {
   updateAdminAlert();
 }
 const SITE_UPDATES = [
+  {version:'v64', items:[
+    'Пресет «Мягкий бас» в мини-плеере с лимитером для защиты колонок',
+    'Низкие частоты усилены на 5 дБ, звук остаётся чистым и приятным'
+  ]},
   {version:'v63', items:[
     'Раздел «Оплата» полностью удалён из сайта',
     'Тексты треков и выбор категории в списке убраны',
@@ -1895,6 +1899,26 @@ async function embeddedCover(file) {
   }return '';
 }
 const audio=new Audio();audio.preload='metadata';let objectURL='',playGeneration=0,embedPlaying=false,lastAudibleVolume=.85;
+
+const audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+const audioSource=audioCtx.createMediaElementSource(audio);
+const bassFilter=audioCtx.createBiquadFilter();
+bassFilter.type='lowshelf';bassFilter.frequency.value=100;bassFilter.gain.value=0;
+const limiter=audioCtx.createDynamicsCompressor();
+limiter.threshold.value=-12;limiter.knee.value=30;limiter.ratio.value=12;limiter.attack.value=0.003;limiter.release.value=0.25;
+audioSource.connect(bassFilter);bassFilter.connect(limiter);limiter.connect(audioCtx.destination);
+let bassEnabled=false;
+function toggleBass(){
+  bassEnabled=!bassEnabled;
+  bassFilter.gain.value=bassEnabled?5:0;
+  const btn=$('#miniPlayerBass');
+  if(btn){btn.setAttribute('aria-pressed',String(bassEnabled));btn.title=bassEnabled?'Мягкий бас: включён':'Мягкий бас';}
+  try{localStorage.setItem('sphere-bass',JSON.stringify({enabled:bassEnabled}));}catch{}
+}
+function restoreBass(){
+  try{const saved=JSON.parse(localStorage.getItem('sphere-bass')||'null');if(saved?.enabled){bassEnabled=true;bassFilter.gain.value=5;const btn=$('#miniPlayerBass');if(btn){btn.setAttribute('aria-pressed','true');btn.title='Мягкий бас: включён';}}}catch{}
+}
+
 const volumeSlider=$('#volumeSlider'),volumeValue=$('#volumeValue'),muteBtn=$('#muteBtn');
 const playlistVolumeSlider=$('#playlistVolumeSlider'),playlistVolumeValue=$('#playlistVolumeValue'),playlistMuteBtn=$('#playlistVolumeMuteBtn');
 const miniVolumeSlider=$('#miniPlayerVolume'),miniVolumeValue=$('#miniPlayerVolumeValue');
@@ -2412,6 +2436,10 @@ $('#playerLoop')?.addEventListener('click',()=>setMusicLoop(!musicLoop));
 syncMusicToggles();
 $('#miniPlayerClose')?.addEventListener('click',()=>stopCurrentTrack());
 $('#miniPlayerCover')?.addEventListener('click',()=>{showView('music');});
+
+$('#miniPlayerBass')?.addEventListener('click',()=>{toggleBass();});
+restoreBass();
+
 
 document.addEventListener('keydown',e=>{
   if(e.code!=='Space'&&e.key!==' ')return;
