@@ -1557,3 +1557,16 @@ body{font-family:"Sora","DM Sans",sans-serif;letter-spacing:-.006em}
 #miniPlayerBass[aria-pressed="true"]{color:var(--green)}
 #miniPlayerBass:hover{color:var(--text)}
 #miniPlayerBass svg{width:18px;height:18px}
+
+/* v65: ползунок темпа (slowed / sped up) */
+.mini-player-tempo{display:none;align-items:center;gap:7px;flex:none;width:0;opacity:0;overflow:hidden;transition:width .28s ease,opacity .2s ease}
+.mini-player-tempo input{width:96px;flex:none}
+.mini-player-tempo-value{flex:none;min-width:40px;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;text-align:right}
+.mini-player-tempo-value.slowed{color:#8bb4ff}
+.mini-player-tempo-value.sped{color:var(--green)}
+@media(hover:hover) and (pointer:fine){
+  .mini-player:hover .mini-player-tempo,.mini-player:focus-within .mini-player-tempo{width:150px;opacity:1}
+}
+@media(max-width:720px){
+  .mini-player-tempo,.mini-player-tempo input{display:none}
+}
