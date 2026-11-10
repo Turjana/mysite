@@ -1551,3 +1551,9 @@ body{font-family:"Sora","DM Sans",sans-serif;letter-spacing:-.006em}
   .track-line-actions button,.track-line-link{width:34px;height:34px;font-size:17px}
   .track-line-actions .heart-btn{width:34px;height:34px;font-size:23px}
 }
+
+/* v64: кнопка мягкого баса */
+#miniPlayerBass{color:var(--muted);transition:color .2s}
+#miniPlayerBass[aria-pressed="true"]{color:var(--green)}
+#miniPlayerBass:hover{color:var(--text)}
+#miniPlayerBass svg{width:18px;height:18px}
