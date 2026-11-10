@@ -449,6 +449,11 @@ function showView(view) {
   updateAdminAlert();
 }
 const SITE_UPDATES = [
+  {version:'v65', items:[
+    'Ползунок темпа в мини-плеере: slowed и sped up как в TikTok',
+    'Тон голоса сохраняется — скорость меняется без эффекта бурундука',
+    'Двойной клик по ползунку возвращает обычную скорость 1.00×'
+  ]},
   {version:'v64', items:[
     'Пресет «Мягкий бас» в мини-плеере с лимитером для защиты колонок',
     'Низкие частоты усилены на 5 дБ, звук остаётся чистым и приятным'
@@ -1922,6 +1927,7 @@ function restoreBass(){
 const volumeSlider=$('#volumeSlider'),volumeValue=$('#volumeValue'),muteBtn=$('#muteBtn');
 const playlistVolumeSlider=$('#playlistVolumeSlider'),playlistVolumeValue=$('#playlistVolumeValue'),playlistMuteBtn=$('#playlistVolumeMuteBtn');
 const miniVolumeSlider=$('#miniPlayerVolume'),miniVolumeValue=$('#miniPlayerVolumeValue');
+const tempoSlider=$('#miniPlayerTempo'),tempoValue=$('#miniPlayerTempoValue');
 function volumeFromState(){const value=+state?.settings?.volume;return Number.isFinite(value)?Math.min(1,Math.max(0,value)):.85;}
 function updateVolumeUI(){
   const percent=Math.round(audio.volume*100);
@@ -2258,7 +2264,7 @@ async function playTrack(id) {
         if(!track.cloudPath){uploadTrackMedia(track,blob).then(path=>{if(path)persist();});}
       }
     }
-    audio.pause();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=fromBlob?src:'';audio.src=src;currentTrack=id;embedPlaying=false;updateVolumeUI();updateNowPlayingLike();$('#musicProgressBar')?.classList.remove('disabled');
+    audio.pause();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=fromBlob?src:'';audio.src=src;currentTrack=id;applyTempo(trackRate,false);embedPlaying=false;updateVolumeUI();updateNowPlayingLike();$('#musicProgressBar')?.classList.remove('disabled');
     const titleEl=$('#nowPlayingTitle'),artistEl=$('#nowPlayingArtist'),artEl=$('.album-art'),heroEl=$('#musicHero');
     if(titleEl)titleEl.textContent=track.title;if(artistEl)artistEl.textContent=track.artist||'Исполнитель не указан';if(artEl)artEl.innerHTML=coverMarkup(track,'playing-cover');if(heroEl)heroEl.classList.remove('empty-player','embed-playing');await audio.play();startAura(track);updateMiniPlayer();savePlaybackState(true);openTrackLyrics(track);
   }catch(error){stopAura();toast(error.message||'Не удалось воспроизвести трек.',true);}
@@ -2437,6 +2443,26 @@ syncMusicToggles();
 $('#miniPlayerClose')?.addEventListener('click',()=>stopCurrentTrack());
 $('#miniPlayerCover')?.addEventListener('click',()=>{showView('music');});
 
+
+let trackRate=1;
+function applyTempo(rate,save=true){
+  trackRate=Math.min(1.5,Math.max(.5,+rate||1));
+  try{audio.preservesPitch=true;audio.mozPreservesPitch=true;audio.webkitPreservesPitch=true;}catch{}
+  try{audio.playbackRate=trackRate;audio.defaultPlaybackRate=trackRate;}catch{}
+  if(tempoSlider&&Math.abs(+tempoSlider.value-trackRate*100)>0.5)tempoSlider.value=String(Math.round(trackRate*100));
+  if(tempoValue){
+    tempoValue.textContent=trackRate.toFixed(2)+'\u00d7';
+    tempoValue.classList.toggle('slowed',trackRate<0.995);
+    tempoValue.classList.toggle('sped',trackRate>1.005);
+  }
+  if(save){try{localStorage.setItem('sphere-tempo',JSON.stringify({rate:trackRate}));}catch{}}
+}
+function restoreTempo(){
+  try{const saved=JSON.parse(localStorage.getItem('sphere-tempo')||'null');if(saved&&saved.rate)applyTempo(saved.rate,false);}catch{}
+}
+tempoSlider?.addEventListener('input',()=>{applyTempo(+tempoSlider.value/100);});
+tempoSlider?.addEventListener('dblclick',()=>{applyTempo(1);});
+restoreTempo();
 $('#miniPlayerBass')?.addEventListener('click',()=>{toggleBass();});
 restoreBass();
 
