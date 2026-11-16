@@ -1570,3 +1570,4 @@ body{font-family:"Sora","DM Sans",sans-serif;letter-spacing:-.006em}
 @media(max-width:720px){
   .mini-player-tempo,.mini-player-tempo input{display:none}
 }
+/* v66: безопасный аудиопат (исправление воспроизведения) */
