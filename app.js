@@ -449,6 +449,11 @@ function showView(view) {
   updateAdminAlert();
 }
 const SITE_UPDATES = [
+  {version:'v66', items:[
+    'Исправлено воспроизведение треков: звук больше не пропадает из-за обработки',
+    'Бас и лимитер подключаются только после нажатия кнопки',
+    'Если браузер блокирует обработку, трек всё равно играет без неё'
+  ]},
   {version:'v65', items:[
     'Ползунок темпа в мини-плеере: slowed и sped up как в TikTok',
     'Тон голоса сохраняется — скорость меняется без эффекта бурундука',
@@ -1905,23 +1910,39 @@ async function embeddedCover(file) {
 }
 const audio=new Audio();audio.preload='metadata';let objectURL='',playGeneration=0,embedPlaying=false,lastAudibleVolume=.85;
 
-const audioCtx=new (window.AudioContext||window.webkitAudioContext)();
-const audioSource=audioCtx.createMediaElementSource(audio);
-const bassFilter=audioCtx.createBiquadFilter();
-bassFilter.type='lowshelf';bassFilter.frequency.value=100;bassFilter.gain.value=0;
-const limiter=audioCtx.createDynamicsCompressor();
-limiter.threshold.value=-12;limiter.knee.value=30;limiter.ratio.value=12;limiter.attack.value=0.003;limiter.release.value=0.25;
-audioSource.connect(bassFilter);bassFilter.connect(limiter);limiter.connect(audioCtx.destination);
-let bassEnabled=false;
+let audioCtx=null,audioSource=null,bassFilter=null,limiter=null,bassEnabled=false,audioRouting=false;
+function ensureAudioRouting(){
+  try{
+    if(audioRouting)return true;
+    const Ctx=window.AudioContext||window.webkitAudioContext;
+    if(!Ctx)return false;
+    if(!audioCtx)audioCtx=new Ctx();
+    if(!audioSource){
+      audioSource=audioCtx.createMediaElementSource(audio);
+      bassFilter=audioCtx.createBiquadFilter();
+      bassFilter.type='lowshelf';bassFilter.frequency.value=100;bassFilter.gain.value=bassEnabled?5:0;
+      limiter=audioCtx.createDynamicsCompressor();
+      limiter.threshold.value=-12;limiter.knee.value=30;limiter.ratio.value=12;limiter.attack.value=0.003;limiter.release.value=0.25;
+      audioSource.connect(bassFilter);bassFilter.connect(limiter);limiter.connect(audioCtx.destination);
+      audioRouting=true;
+    }
+    if(audioCtx.state==='suspended')audioCtx.resume().catch(()=>{});
+    return true;
+  }catch{return false;}
+}
 function toggleBass(){
   bassEnabled=!bassEnabled;
-  bassFilter.gain.value=bassEnabled?5:0;
+  if(bassEnabled&&!ensureAudioRouting()){
+    bassEnabled=false;
+    toast('Брасер не разрешил обработку звука. Попробуйте ещё раз после нажатия на трек.',true);
+  }
+  if(bassFilter)bassFilter.gain.value=bassEnabled?5:0;
   const btn=$('#miniPlayerBass');
   if(btn){btn.setAttribute('aria-pressed',String(bassEnabled));btn.title=bassEnabled?'Мягкий бас: включён':'Мягкий бас';}
   try{localStorage.setItem('sphere-bass',JSON.stringify({enabled:bassEnabled}));}catch{}
 }
 function restoreBass(){
-  try{const saved=JSON.parse(localStorage.getItem('sphere-bass')||'null');if(saved?.enabled){bassEnabled=true;bassFilter.gain.value=5;const btn=$('#miniPlayerBass');if(btn){btn.setAttribute('aria-pressed','true');btn.title='Мягкий бас: включён';}}}catch{}
+  try{const saved=JSON.parse(localStorage.getItem('sphere-bass')||'null');if(saved?.enabled){bassEnabled=true;const btn=$('#miniPlayerBass');if(btn){btn.setAttribute('aria-pressed','true');btn.title='Мягкий бас: включён';}}}catch{}
 }
 
 const volumeSlider=$('#volumeSlider'),volumeValue=$('#volumeValue'),muteBtn=$('#muteBtn');
@@ -2264,7 +2285,7 @@ async function playTrack(id) {
         if(!track.cloudPath){uploadTrackMedia(track,blob).then(path=>{if(path)persist();});}
       }
     }
-    audio.pause();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=fromBlob?src:'';audio.src=src;currentTrack=id;applyTempo(trackRate,false);embedPlaying=false;updateVolumeUI();updateNowPlayingLike();$('#musicProgressBar')?.classList.remove('disabled');
+    audio.pause();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=fromBlob?src:'';audio.src=src;currentTrack=id;applyTempo(trackRate,false);if(bassEnabled)ensureAudioRouting();embedPlaying=false;updateVolumeUI();updateNowPlayingLike();$('#musicProgressBar')?.classList.remove('disabled');
     const titleEl=$('#nowPlayingTitle'),artistEl=$('#nowPlayingArtist'),artEl=$('.album-art'),heroEl=$('#musicHero');
     if(titleEl)titleEl.textContent=track.title;if(artistEl)artistEl.textContent=track.artist||'Исполнитель не указан';if(artEl)artEl.innerHTML=coverMarkup(track,'playing-cover');if(heroEl)heroEl.classList.remove('empty-player','embed-playing');await audio.play();startAura(track);updateMiniPlayer();savePlaybackState(true);openTrackLyrics(track);
   }catch(error){stopAura();toast(error.message||'Не удалось воспроизвести трек.',true);}
